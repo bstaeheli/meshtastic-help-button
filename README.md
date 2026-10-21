@@ -51,6 +51,7 @@ FORK_DIR=~/src/firmware scripts/build.sh   # use an existing local checkout
 `config/help-button.ini` to its `platformio.ini`, builds, and writes UF2 files and
 `SHA256SUMS` to `dist/`. `UPSTREAM_VERSION` is the stable Meshtastic tag the fork branch is based on.
 `scripts/export-patches.sh` regenerates `patches/` and `scripts/rebase.sh <tag>` moves the fork branch to a new upstream tag.
+Custom texts: see the escaping note in `config/help-button.ini` (quadruple backslash; `UBA_ACK_TEXT=nullptr` disables the ack).
 
 ## Versioning
 

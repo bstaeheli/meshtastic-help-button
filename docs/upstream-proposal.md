@@ -1,6 +1,6 @@
 # Upstream proposal: user button actions
 
-Draft for `meshtastic/firmware`. Not implemented in the fork; protobuf changes belong in `meshtastic/protobufs`.
+Draft for `meshtastic/firmware`. Implemented as a compile-time prototype in [the fork branch](https://github.com/bstaeheli/firmware/tree/feature/user-button-actions) (base `v2.7.26.54e0d8d`); the runtime protobuf config below is not implemented. Protobuf changes belong in `meshtastic/protobufs`.
 
 ## Motivation
 
@@ -57,6 +57,16 @@ The build-flag config maps 1:1 to the protobuf fields (`UBA_SINGLE_PRESS` -> `si
 `UBA_ALERT_MIN_INTERVAL_SECS` -> `alert_min_interval_secs`, `UBA_ACK_TEXT` non-null -> `send_ack`,
 `UBA_LONG_PRESS_SHUTDOWN_MS` -> `long_press_shutdown_secs`). Swapping the source to
 `moduleConfig` is a one-function change.
+
+## Implementation notes (fork)
+
+- Gesture mapping lives in `src/input/InputBroker.cpp` (`userConfigNoScreen`); `ButtonThread` emits `INPUT_BROKER_*` events.
+- Stock nag stop is in `InputBroker::handleInputEvent` via `externalNotificationModule->nagging()` / `stopNow()`.
+- Ad-hoc position: `service->refreshLocalMeshNode()` then `service->trySendPosition(NODENUM_BROADCAST, true)`, as `SystemCommandsModule` does for `INPUT_BROKER_SEND_PING`.
+- Text send: `router->allocForSending()`, channel 0, `HIGH`, `want_ack = false`, `sendToMesh(p, RX_SRC_LOCAL, true)`.
+- Pure decision logic: `UserButtonGesture {USER_BUTTON_SINGLE, USER_BUTTON_DOUBLE}`, `UserButtonOutcome` (`UBA_OUTCOME_*`), `UserButtonRateLimiter`, `userButtonActionsResolve()`; unit-tested in `test_user_button_actions`.
+- Long press: stock threshold is 3900 ms (`ButtonConfig::longLongPressTime`, `uint16_t`), applied only after 30 s uptime, on release.
+- Limitations: a handled press skips the stock buzzer beep; `SEND_ALERT` does not stop a nag.
 
 ## Test plan
 
