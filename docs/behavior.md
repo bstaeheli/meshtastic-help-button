@@ -4,30 +4,33 @@ Preset behavior of the Help Button firmware (`rak_wismeshtag_sos`).
 
 | Button gesture | Stock behavior | Preset behavior |
 | --- | --- | --- |
-| Single press, double press, any rapid multi-press, or holding the button | single press stops a nag; double press sends a position; triple toggles GPS; four presses mute the buzzer | all identical: if a nag runs, stop it, send `\x07OK` and beep; otherwise send `\x07HELP` plus position (no replies requested) and beep |
-| Press within 30 s after a sent alert | n/a | short "boop", nothing sent |
-| Hold of 15 s or more | shutdown after 3.9 s (only after 30 s uptime, on release) | shutdown, released after 30 s uptime; the HELP already went out at about 0.5 s, so switching off also sends one HELP |
+| Any press while a melody plays (nag or hint tune) | single press stops a nag | stops the melody at button-down; a nag also sends `\x07OK` and beeps; the rest of that press does nothing |
+| Click, or hold and release under 3 s | single press stops a nag; otherwise nothing | `\x07HELP` plus position, beep |
+| Double click or rapid multi-press | double: position; triple: GPS toggle; four: mute | `\x07SOS` plus position, beep |
+| Release after 3 to 10 s | shutdown after 3.9 s | nothing sent; short hint jingle (C5 E5 G5 E5 C5) means "not sent" |
+| Release after 10 s or more | shutdown after 3.9 s (only after 30 s uptime) | switch off with the stock shutdown melody, only if uptime was over 30 s, else nothing |
+| HELP or SOS again within 30 s | n/a | short "boop", nothing sent |
 
-Holding the button sends HELP after about 0.5 s. Keep holding for 15 s (the lead-up melody ends at
-the shutdown point) to switch off.
+While the button is held from 3 s on, eight rising notes (C3 to C4, 200 ms each, at about 3.0, 4.0, 4.9,
+5.9, 6.9, 7.9, 8.8 and 9.8 s) count up to the shutdown; releasing stops the melody. The tag switches off
+on release, not while held (a held pin would wake the nRF52 again). Timings have 50-100 ms polling jitter.
 
-The stock double-press ping, triple-press GPS toggle and four-press mute are unreachable with this
-preset.
-Devices with a screen keep the stock behavior.
+HELP and SOS have separate 30 s windows. `\x07OK` is never rate-limited. The stock double-press ping,
+triple-press GPS toggle and four-press mute are unreachable with this preset. Devices with a screen keep
+the stock behavior.
 
 ## Rules
 
-- Help messages are rate-limited (preset 30 s). Presses inside the window are ignored and logged at debug level.
 - Texts are broadcast on channel index 0, port `TEXT_MESSAGE_APP`, priority `HIGH`, `want_ack = false`, and delivered to a connected phone as well.
-- The bell character (`0x07`) is part of both texts so phones and buzzers alert.
-- Texts: the preset sends `\x07HELP` / `\x07OK`.
+- The bell character (`0x07`) is part of all texts so phones and buzzers alert.
+- Texts: the preset sends `\x07HELP` / `\x07SOS` / `\x07OK`.
 
 ## Known limitations
 
-- If the regional hourly duty-cycle limit is exhausted (e.g. EU_868), the firmware drops the HELP silently although the tag beeps.
+- If the regional hourly duty-cycle limit is exhausted (e.g. EU_868), the firmware drops the message silently although the tag beeps.
 - Audible confirmation needs `buzzer_mode` `ALL_ENABLED` (the default).
-- `SEND_ALERT` (unlike `ACK_OR_ALERT`) does not stop a running nag.
-- The hold time is a `uint16_t` in milliseconds (max 65535).
+- `SEND_ALERT` / `SEND_ALERT2` (unlike the `ACK_OR_*` actions) do not stop a running nag.
+- Times are `uint16_t` milliseconds in the stock button code (max 65 s).
 - Design risk: the `\x07OK` ack contains the bell, so other tags with this preset on the same
   channel start nagging. A sibling's press then acknowledges instead of sending HELP.
 
@@ -40,9 +43,10 @@ replies with the acknowledgement text. It does not send a help message.
 ## Build flags
 
 The flags in `config/help-button.ini` map 1:1 to `UserButtonActionsConfig`:
-`UBA_SINGLE_PRESS`, `UBA_DOUBLE_PRESS`, `UBA_MULTI_PRESS`, `UBA_ALERT_TEXT`, `UBA_ACK_TEXT`,
-`UBA_ALERT_WITH_POSITION`, `UBA_ALERT_MIN_INTERVAL_SECS`, `UBA_LONG_PRESS_SHUTDOWN_MS`.
-String flags need the quadruple-backslash form used in `config/help-button.ini`
-(`-D UBA_ALERT_TEXT=\"\\\\x07HELP\"`). `\x` escapes are greedy: text after the bell must not
-start with a hex digit (`\x07ALARM` breaks). `-D UBA_ACK_TEXT=nullptr` disables the ack message.
+`UBA_SINGLE_PRESS`, `UBA_DOUBLE_PRESS`, `UBA_MULTI_PRESS`, `UBA_ALERT_TEXT`, `UBA_ALERT2_TEXT`,
+`UBA_ACK_TEXT`, `UBA_ALERT_WITH_POSITION`, `UBA_ALERT_MIN_INTERVAL_SECS` (per level),
+`UBA_HOLD_ALERT_MAX_MS` (3000), `UBA_LONG_PRESS_SHUTDOWN_MS` (10000, max 65535).
+`scripts/build.sh` fills texts and times from validated parameters (`HB_*`, see the script header).
+Texts are 1-40 characters of `A-Za-z0-9.,!?-` (no spaces). The bell is emitted as the octal escape
+`\007`, so any text may follow. `-D UBA_ACK_TEXT=nullptr` disables the ack message.
 Without `MESHTASTIC_USER_BUTTON_ACTIONS=1` the firmware equals stock.

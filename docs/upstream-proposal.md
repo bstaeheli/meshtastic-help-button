@@ -27,6 +27,8 @@ message UserButtonConfig {
     ADHOC_POSITION = 2;
     SEND_ALERT = 3;
     ACK_OR_ALERT = 4;
+    SEND_ALERT2 = 5;
+    ACK_OR_ALERT2 = 6;
   }
   bool enabled = 1;
   Action single_press = 2;
@@ -34,9 +36,11 @@ message UserButtonConfig {
   Action multi_press = 9;           // three or more rapid presses
   string alert_text = 4;            // max 50 bytes; bell prepended by firmware if missing
   bool alert_with_position = 5;
-  uint32 alert_min_interval_secs = 6;
+  uint32 alert_min_interval_secs = 6;    // per alert level
   bool send_ack = 7;
   uint32 long_press_shutdown_secs = 8;
+  string alert2_text = 10;          // second level, e.g. SOS
+  uint32 hold_alert_max_secs = 11;  // default 3; longer holds only play a hint
 }
 ```
 
@@ -47,7 +51,7 @@ Upstream declined earlier requests mainly over accidental sends on devices witho
 - **Opt-in:** guarded by `MESHTASTIC_USER_BUTTON_ACTIONS` (compile-time, default off); with the flag off the binary equals stock. Upstream could make it a runtime `enabled` field, default false.
 - **Rate limit:** `alert_min_interval_secs` (preset 30 s); presses inside the window are ignored and logged.
 - **Acknowledge logic:** if an External Notification nag is running, the press stops it and sends the ack text instead of an alert. Replying to a "come home" never produces a false alarm.
-- **Long-press time:** `long_press_shutdown_secs` (preset 15 s) so the device is not switched off by accident in a pocket or a child's hand.
+- **Long-press time:** `long_press_shutdown_secs` (preset 10 s, switched off on release) so the device is not switched off by accident in a pocket or a child's hand.
 - Gestures with other stock meanings stay unchanged by default (`DEFAULT`). The preset overrides double and multi-press, making the stock ping, GPS toggle and mute unreachable.
 - Audible feedback: a beep when an alert or ack is sent, a short "boop" when rate-limited.
 
@@ -68,7 +72,7 @@ The build-flag config maps 1:1 to the protobuf fields (`UBA_SINGLE_PRESS` -> `si
 - Text send: `router->allocForSending()`, channel 0, `HIGH`, `want_ack = false`, `sendToMesh(p, RX_SRC_LOCAL, true)`.
 - Pure decision logic: `UserButtonGesture {USER_BUTTON_SINGLE, USER_BUTTON_DOUBLE}`, `UserButtonOutcome` (`UBA_OUTCOME_*`), `UserButtonRateLimiter`, `userButtonActionsResolve()`; unit-tested in `test_user_button_actions`.
 - Long press: stock threshold is 3900 ms (`ButtonConfig::longLongPressTime`, `uint16_t`), applied only after 30 s uptime, on release.
-- Holding the button fires the alert at about 0.5 s; the lead-up melody ends at the shutdown time.
+- Holds: release under 3 s acts as a click, 3-10 s plays a "not sent" hint, 10 s or more shuts down on release; a rising count-up melody plays from 3 s. Any press stops a playing melody first.
 - Limitations: a silent drop when the regional duty-cycle limit is exhausted; `SEND_ALERT` does not stop a nag; the bell in the ack text makes sibling tags on the same channel nag.
 
 ## Test plan
@@ -77,7 +81,7 @@ The build-flag config maps 1:1 to the protobuf fields (`UBA_SINGLE_PRESS` -> `si
 2. App shows the upstream version; pairing, GPS, position broadcast, external notification work as before.
 3. Single press while idle: handheld receives alert text with bell plus a fresh position within seconds; a second press within the interval does nothing.
 4. Bell message to the tag: ringtone nags; single press stops it; handheld receives `OK`; no alert sent.
-5. With `DEFAULT` mapping, double press still sends ad-hoc position and quadruple press still mutes; with the preset every press behaves like a single press.
+5. With `DEFAULT` mapping, double press still sends ad-hoc position and quadruple press still mutes; with the preset a click sends HELP and a double or rapid press sends SOS.
 6. Long press shorter than the configured time does nothing; longer shuts down.
 7. Flag off: firmware behaves exactly like stock (same tests as stock).
 8. Battery over 24 h unchanged versus stock.

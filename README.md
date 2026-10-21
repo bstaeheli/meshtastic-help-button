@@ -29,9 +29,12 @@ Download the `.uf2` from the [releases](../../releases) and follow
 
 ## Usage for parents
 
-- Any press (single, double, rapid) when the tag is quiet: "I need help". You get a message and the position.
-- When the tag plays its melody: come home. One press stops it and tells you the child heard it.
-- Holding the button sends a help message after about half a second. Keep holding for 15 seconds (the melody ends then) to switch the tag off; this also sends one help message. You notice the tag is off because positions stop.
+- Click: "I need help" (HELP). You get a message and the position.
+- Double click or several quick clicks: "SOS", same with position.
+- When the tag plays its melody: come home. Any press stops it and tells you the child heard it.
+- A short beep means sent; a tiny boop means "already sent, wait 30 s". A hold of 3 to 10 seconds sends
+  nothing and plays a short jingle. Holding for 10 seconds and letting go switches the tag off; you notice
+  because positions stop.
 
 Details: [docs/behavior.md](docs/behavior.md). Forwarding alerts via MQTT: [docs/node-red.md](docs/node-red.md).
 
@@ -58,7 +61,7 @@ FORK_DIR=~/src/firmware scripts/build.sh   # use an existing local checkout
 `config/help-button.ini` to its `platformio.ini`, builds, and writes UF2 files and
 `SHA256SUMS` to `dist/`. `UPSTREAM_VERSION` is the stable Meshtastic tag the fork branch is based on.
 `scripts/export-patches.sh` regenerates `patches/` and `scripts/rebase.sh <tag>` moves the fork branch to a new upstream tag.
-Custom texts: see the escaping note in `config/help-button.ini` (quadruple backslash; `UBA_ACK_TEXT=nullptr` disables the ack).
+Custom texts and times: set the `HB_*` variables described at the top of `scripts/build.sh`.
 
 ## Versioning
 
