@@ -9,3 +9,4 @@ and the project uses [Semantic Versioning](https://semver.org/).
 ### Added
 - Project scaffold: build preset `rak_wismeshtag_sos`,
   build/export/rebase scripts, CI, and documentation.
+- SemVer release scheme; UF2 names include the project and upstream Meshtastic versions.

@@ -52,6 +52,13 @@ FORK_DIR=~/src/firmware scripts/build.sh   # use an existing local checkout
 `SHA256SUMS` to `dist/`. `UPSTREAM_VERSION` is the stable Meshtastic tag the fork branch is based on.
 `scripts/export-patches.sh` regenerates `patches/` and `scripts/rebase.sh <tag>` moves the fork branch to a new upstream tag.
 
+## Versioning
+
+- Releases use their own SemVer tags `vMAJOR.MINOR.PATCH`, starting at `v0.1.0`. MAJOR stays 0 until the feature is hardware-tested and stable.
+- MINOR: new behavior, presets or config fields. PATCH: fixes and pure rebases onto a newer Meshtastic patch release.
+- The firmware version shown in the app stays upstream's `2.x.y.<sha>`; the sha is the fork commit of our build.
+- UF2 names: `help-button-<version>-mt<upstream>-<env>.uf2`, e.g. `help-button-0.1.0-mt2.7.15-rak_wismeshtag_sos.uf2`.
+
 ## Related upstream discussions
 
 The need is long-standing; upstream declined it as a default mainly because of accidental
