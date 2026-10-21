@@ -2,7 +2,7 @@
 
 A base node bridges the mesh to MQTT. With JSON output enabled on the base node, text
 messages arrive as JSON with `type: "text"` and `payload.text`. The alert and acknowledgement
-texts start with the bell character `\u0007`.
+texts start with the bell character `\u0007`: `\u0007HELP`, `\u0007SOS` and `\u0007OK`.
 
 Flow: `mqtt in` (topic `msh/<region>/2/json/<channel>/#`) -> `json` -> function node below -> notification node of your choice.
 
@@ -13,7 +13,7 @@ if (msg.payload.type !== "text" || typeof text !== "string" || text[0] !== "\u00
     return null;
 }
 const body = text.slice(1);
-msg.kind = body === "OK" ? "ack" : "alert";
+msg.kind = body === "OK" ? "ack" : body === "SOS" ? "sos" : "alert"; // HELP -> alert
 msg.topic = `${msg.kind}: ${body}`;
 msg.payload = { from: msg.payload.from, sender: msg.payload.sender, text: body, kind: msg.kind };
 return msg;
