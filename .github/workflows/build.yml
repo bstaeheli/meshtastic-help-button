@@ -7,7 +7,28 @@ on:
 permissions:
   contents: read
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: ref
+        run: echo "sha=$(<FORK_REF)" >>"$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: bstaeheli/firmware
+          ref: ${{ steps.ref.outputs.sha }}
+          path: firmware
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: sudo apt-get update -y && sudo apt-get install -y libbluetooth-dev libgpiod-dev libyaml-cpp-dev
+      - run: platformio test -e coverage -f test_user_button_actions
+        working-directory: firmware
   build:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
