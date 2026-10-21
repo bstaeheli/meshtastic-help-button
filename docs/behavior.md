@@ -15,6 +15,9 @@ While the button is held from 3 s on, eight rising notes (C3 to C4, 200 ms each,
 5.9, 6.9, 7.9, 8.8 and 9.8 s) count up to the shutdown; releasing stops the melody. The tag switches off
 on release, not while held (a held pin would wake the nRF52 again). Timings have 50-100 ms polling jitter.
 
+The press decides on the state at button-down: a bell text arriving during the press does not turn
+HELP into OK. A hold released while a nag is running does nothing (no hint over a nag).
+
 HELP and SOS have separate 30 s windows. `\x07OK` is never rate-limited. The stock double-press ping,
 triple-press GPS toggle and four-press mute are unreachable with this preset. Devices with a screen keep
 the stock behavior.

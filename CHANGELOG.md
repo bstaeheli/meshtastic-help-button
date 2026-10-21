@@ -12,8 +12,8 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - OTA (Bluetooth) update instructions in `docs/flashing.md`.
 
 ### Changed
-- Fork updated to `a0b46e2`: click or short hold sends HELP, double or rapid press sends SOS (separate 30 s
-  windows), any press stops a playing melody, a 3-10 s hold plays a "not sent" hint, a 10 s hold shuts down on release.
+- Fork updated to `31ad1fd`: click or short hold sends HELP, double or rapid press sends SOS (separate 30 s
+  windows; the press decides on the state at button-down), any press stops a playing melody, a 3-10 s hold plays a "not sent" hint, a 10 s hold shuts down on release.
 - Preset sets `UBA_DOUBLE_PRESS`, `UBA_MULTI_PRESS` to `ACK_OR_ALERT2`, `UBA_HOLD_ALERT_MAX_MS=3000`, `UBA_LONG_PRESS_SHUTDOWN_MS=10000`.
 - Removed the `device.disable_triple_click` advice (no reader in v2.7.26).
 
