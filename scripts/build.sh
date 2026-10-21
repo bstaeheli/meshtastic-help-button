@@ -15,9 +15,10 @@ envs=("$@")
 [ ${#envs[@]} -gt 0 ] || envs=(rak_wismeshtag_sos)
 
 [ -d "$FORK_DIR/.git" ] || git clone "$FORK_URL" "$FORK_DIR"
-git -C "$FORK_DIR" fetch --tags origin
+git -C "$FORK_DIR" cat-file -e "$ref^{commit}" 2>/dev/null || git -C "$FORK_DIR" fetch --tags origin
 git -C "$FORK_DIR" checkout -- platformio.ini # idempotent: drop a previous append
 git -C "$FORK_DIR" checkout "$ref"
+trap 'git -C "$FORK_DIR" checkout -- platformio.ini' EXIT
 { echo; cat "$root/config/help-button.ini"; } >>"$FORK_DIR/platformio.ini"
 
 rm -rf "$root/dist"
