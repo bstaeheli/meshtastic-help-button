@@ -7,5 +7,5 @@ and the project uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-- Project scaffold: build presets `rak_wismeshtag_kidtag` and `rak_wismeshtag_sos`,
+- Project scaffold: build preset `rak_wismeshtag_sos`,
   build/export/rebase scripts, CI, and documentation.

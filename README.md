@@ -12,9 +12,9 @@ build presets, scripts, CI and documentation. See [docs/upstream-proposal.md](do
 
 ## Supported devices
 
-| Device | Variant | Presets |
+| Device | Variant | Preset |
 | --- | --- | --- |
-| RAK WisMesh Tag | `rak_wismeshtag` | `rak_wismeshtag_kidtag` (German texts), `rak_wismeshtag_sos` (English texts) |
+| RAK WisMesh Tag | `rak_wismeshtag` | `rak_wismeshtag_sos` |
 
 More trackers are added only after a hardware test.
 
@@ -39,7 +39,7 @@ Requires Python 3 and git.
 ```sh
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
-scripts/build.sh                       # both presets, output in dist/
+scripts/build.sh                       # builds the preset, output in dist/
 scripts/build.sh rak_wismeshtag_sos    # one preset
 FORK_DIR=~/src/firmware scripts/build.sh   # use an existing local checkout
 ```

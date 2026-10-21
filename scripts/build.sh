@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the KidTag presets from the fork at FORK_REF. Usage: build.sh [env...]
+# Build the KidTag preset from the fork at FORK_REF. Usage: build.sh [env...]
 # Env: FORK_URL (default: bstaeheli/firmware), FORK_DIR (existing checkout to use).
 set -euo pipefail
 
@@ -9,7 +9,7 @@ FORK_DIR=${FORK_DIR:-$root/build/firmware}
 ref=$(<"$root/FORK_REF")
 version=$(git -C "$root" describe --tags --always 2>/dev/null || echo dev)
 envs=("$@")
-[ ${#envs[@]} -gt 0 ] || envs=(rak_wismeshtag_kidtag rak_wismeshtag_sos)
+[ ${#envs[@]} -gt 0 ] || envs=(rak_wismeshtag_sos)
 
 [ -d "$FORK_DIR/.git" ] || git clone "$FORK_URL" "$FORK_DIR"
 git -C "$FORK_DIR" fetch --tags origin
