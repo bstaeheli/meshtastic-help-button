@@ -35,6 +35,13 @@ Download the `.uf2` from the [releases](../../releases) and follow
 
 Details: [docs/behavior.md](docs/behavior.md). Forwarding alerts via MQTT: [docs/node-red.md](docs/node-red.md).
 
+## Custom build from your phone
+
+Want other texts or timings? In the GitHub app open this repository, Actions, "custom-build",
+Run workflow, and fill in the texts (1-40 characters of `A-Za-z0-9.,!?-`, no spaces), hold seconds,
+shutdown seconds and rate-limit seconds. When it finishes (a few minutes), the new pre-release
+`custom-<n>` holds the `-ota.zip` for a Bluetooth update and the `.uf2`; see [docs/flashing.md](docs/flashing.md).
+
 ## Build
 
 Requires Python 3 and git.

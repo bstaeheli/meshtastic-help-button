@@ -6,6 +6,11 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added (custom builds)
+- `custom-build` workflow: build with your own texts and timings from the GitHub mobile app; publishes a pre-release with the OTA zip and UF2.
+- `build.sh` takes validated `HB_*` parameters, writes the OTA zip to `dist/`, and emits the bell as an octal escape so any text may follow it.
+- OTA (Bluetooth) update instructions in `docs/flashing.md`.
+
 ### Changed
 - Fork updated to `a8aaf40` (review fixes): every press, rapid multi-press and short hold
   acknowledges a nag or sends help, with a beep; rate-limited presses boop; holding sends HELP after about 0.5 s and a 15 s hold shuts down (also sending one HELP).

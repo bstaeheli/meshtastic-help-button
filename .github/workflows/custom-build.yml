@@ -1,0 +1,72 @@
+name: custom-build
+on:
+  workflow_dispatch:
+    inputs:
+      help_text:
+        description: Text for one press or a short hold (1-40 of A-Za-z0-9.,!?-)
+        default: HELP
+      sos_text:
+        description: Text for double press or rapid presses
+        default: SOS
+      ok_text:
+        description: Acknowledgement text
+        default: OK
+      hold_secs:
+        description: Longest hold that still sends HELP (seconds)
+        default: "5"
+      off_secs:
+        description: Hold time that switches the tag off (seconds, max 65)
+        default: "10"
+      rate_secs:
+        description: Minimum seconds between two alerts of the same kind
+        default: "30"
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Build
+        # inputs reach the script only as environment variables; build.sh validates them
+        env:
+          HB_HELP_TEXT: ${{ inputs.help_text }}
+          HB_SOS_TEXT: ${{ inputs.sos_text }}
+          HB_OK_TEXT: ${{ inputs.ok_text }}
+          HB_HOLD_SECS: ${{ inputs.hold_secs }}
+          HB_OFF_SECS: ${{ inputs.off_secs }}
+          HB_RATE_SECS: ${{ inputs.rate_secs }}
+          HB_VERSION: custom-${{ github.run_number }}
+        run: scripts/build.sh
+      - name: Release notes
+        env:
+          HELP: ${{ inputs.help_text }}
+          SOS: ${{ inputs.sos_text }}
+          OK: ${{ inputs.ok_text }}
+          HOLD: ${{ inputs.hold_secs }}
+          OFF: ${{ inputs.off_secs }}
+          RATE: ${{ inputs.rate_secs }}
+        run: |
+          {
+            echo "Custom build from \`$(<FORK_REF)\`."
+            echo
+            echo "- help: \`$HELP\`, sos: \`$SOS\`, ok: \`$OK\`"
+            echo "- hold: ${HOLD} s, off: ${OFF} s, rate limit: ${RATE} s"
+            echo
+            echo '```'
+            cat dist/SHA256SUMS
+            echo '```'
+          } >notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: custom-${{ github.run_number }}
+          prerelease: true
+          body_path: notes.md
+          files: dist/*
