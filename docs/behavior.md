@@ -4,13 +4,15 @@ Preset behavior of the Help Button firmware (`rak_wismeshtag_sos`).
 
 | Button gesture | Stock behavior | Preset behavior |
 | --- | --- | --- |
-| Single press, double press, any rapid multi-press, or a hold released before 15 s | single press stops a nag; double press sends a position; triple toggles GPS; four presses mute the buzzer | all identical: if a nag runs, stop it, send `\x07OK` and beep; otherwise send `\x07HELP` plus position (no replies requested) and beep |
+| Single press, double press, any rapid multi-press, or holding the button | single press stops a nag; double press sends a position; triple toggles GPS; four presses mute the buzzer | all identical: if a nag runs, stop it, send `\x07OK` and beep; otherwise send `\x07HELP` plus position (no replies requested) and beep |
 | Press within 30 s after a sent alert | n/a | short "boop", nothing sent |
-| Hold of 15 s or more | shutdown after 3.9 s (only after 30 s uptime, on release) | shutdown, released after 30 s uptime |
+| Hold of 15 s or more | shutdown after 3.9 s (only after 30 s uptime, on release) | shutdown, released after 30 s uptime; the HELP already went out at about 0.5 s, so switching off also sends one HELP |
+
+Holding the button sends HELP after about 0.5 s. Keep holding for 15 s (the lead-up melody ends at
+the shutdown point) to switch off.
 
 The stock double-press ping, triple-press GPS toggle and four-press mute are unreachable with this
-preset. TX queue full: nothing is sent, no beep, no window starts, and the next press retries.
-The tune that plays at 2-4 s of a hold is not a shutdown cue; keep holding to 15 s.
+preset.
 Devices with a screen keep the stock behavior.
 
 ## Rules
@@ -22,6 +24,7 @@ Devices with a screen keep the stock behavior.
 
 ## Known limitations
 
+- If the regional hourly duty-cycle limit is exhausted (e.g. EU_868), the firmware drops the HELP silently although the tag beeps.
 - Audible confirmation needs `buzzer_mode` `ALL_ENABLED` (the default).
 - `SEND_ALERT` (unlike `ACK_OR_ALERT`) does not stop a running nag.
 - The hold time is a `uint16_t` in milliseconds (max 65535).

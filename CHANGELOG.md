@@ -8,7 +8,7 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 - Fork updated to `a8aaf40` (review fixes): every press, rapid multi-press and short hold
-  acknowledges a nag or sends help, with a beep; rate-limited presses boop; shutdown needs a 15 s hold.
+  acknowledges a nag or sends help, with a beep; rate-limited presses boop; holding sends HELP after about 0.5 s and a 15 s hold shuts down (also sending one HELP).
 - Preset sets `UBA_DOUBLE_PRESS` and new `UBA_MULTI_PRESS` to `ACK_OR_ALERT`.
 - Removed the `device.disable_triple_click` advice (no reader in v2.7.26).
 

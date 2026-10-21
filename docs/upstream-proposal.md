@@ -49,7 +49,7 @@ Upstream declined earlier requests mainly over accidental sends on devices witho
 - **Acknowledge logic:** if an External Notification nag is running, the press stops it and sends the ack text instead of an alert. Replying to a "come home" never produces a false alarm.
 - **Long-press time:** `long_press_shutdown_secs` (preset 15 s) so the device is not switched off by accident in a pocket or a child's hand.
 - Gestures with other stock meanings stay unchanged by default (`DEFAULT`). The preset overrides double and multi-press, making the stock ping, GPS toggle and mute unreachable.
-- Audible feedback: a beep when an alert or ack is sent, a short "boop" when rate-limited; no send, beep or window when the TX queue is full.
+- Audible feedback: a beep when an alert or ack is sent, a short "boop" when rate-limited.
 
 ## Migration note
 
@@ -68,7 +68,8 @@ The build-flag config maps 1:1 to the protobuf fields (`UBA_SINGLE_PRESS` -> `si
 - Text send: `router->allocForSending()`, channel 0, `HIGH`, `want_ack = false`, `sendToMesh(p, RX_SRC_LOCAL, true)`.
 - Pure decision logic: `UserButtonGesture {USER_BUTTON_SINGLE, USER_BUTTON_DOUBLE}`, `UserButtonOutcome` (`UBA_OUTCOME_*`), `UserButtonRateLimiter`, `userButtonActionsResolve()`; unit-tested in `test_user_button_actions`.
 - Long press: stock threshold is 3900 ms (`ButtonConfig::longLongPressTime`, `uint16_t`), applied only after 30 s uptime, on release.
-- Limitations: `SEND_ALERT` does not stop a nag; the bell in the ack text makes sibling tags on the same channel nag.
+- Holding the button fires the alert at about 0.5 s; the lead-up melody ends at the shutdown time.
+- Limitations: a silent drop when the regional duty-cycle limit is exhausted; `SEND_ALERT` does not stop a nag; the bell in the ack text makes sibling tags on the same channel nag.
 
 ## Test plan
 
