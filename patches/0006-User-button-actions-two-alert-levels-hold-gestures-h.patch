@@ -1,7 +1,7 @@
 From 168f25ae7a9f88db362902c6c45be1f7005c3976 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Boris=20Sta=CC=88heli?= <ich@bstaehe.li>
 Date: Wed, 21 Oct 2026 15:33:51 +0200
-Subject: [PATCH 6/8] User button actions: two alert levels, hold gestures,
+Subject: [PATCH 6/9] User button actions: two alert levels, hold gestures,
  hint tune
 
 - Add a second alert level (BUTTON_ACTION_SEND_ALERT2,

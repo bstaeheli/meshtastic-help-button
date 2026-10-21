@@ -1,0 +1,232 @@
+From 31ad1fd275fb8443750f63f9dc998df0ff3887f9 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Boris=20Sta=CC=88heli?= <ich@bstaehe.li>
+Date: Wed, 21 Oct 2026 16:37:22 +0200
+Subject: [PATCH 9/9] User button actions: decide on the state at button-down
+
+- Snapshot the notification state at button-down. A bell message that
+  arrives during the press or before the click is reported no longer
+  turns the alert into an ack; without an observed button-down the
+  current state is used as before.
+- A hold released while a notification runs plays no hint tune over it.
+- End the hint tune right after its last note, so a press just after it
+  is not taken as stopping the tune.
+---
+ src/buzz/buzz.cpp                           |  8 +--
+ src/buzz/buzz.h                             |  2 +-
+ src/input/UserButtonActions.cpp             |  7 ++-
+ src/input/UserButtonActions.h               | 21 ++++++--
+ test/test_user_button_actions/test_main.cpp | 59 ++++++++++++++++++++-
+ 5 files changed, 86 insertions(+), 11 deletions(-)
+
+diff --git a/src/buzz/buzz.cpp b/src/buzz/buzz.cpp
+index 480915c2f..981ef15a9 100644
+--- a/src/buzz/buzz.cpp
++++ b/src/buzz/buzz.cpp
+@@ -245,13 +245,13 @@ void resetLeadUpSequence()
+ 
+ #if MESHTASTIC_USER_BUTTON_ACTIONS
+ // Soft, friendly up-and-down jingle (C major, mid range) for "button held, nothing was sent"
+-bool playHintNote(int index)
++void playHintNote(int index)
+ {
+     static const ToneDuration hintNotes[] = {{NOTE_C5, 150}, {NOTE_E5, 150}, {NOTE_G5, 150}, {NOTE_E5, 150}, {NOTE_C5, 300}};
+-    if (index < 0 || index >= (int)(sizeof(hintNotes) / sizeof(ToneDuration)))
+-        return false;
++    static_assert(sizeof(hintNotes) / sizeof(hintNotes[0]) == UBA_HINT_NOTES, "one entry per hint note");
++    if (index < 0 || index >= UBA_HINT_NOTES)
++        return;
+     playTones(&hintNotes[index], 1);
+-    return true;
+ }
+ 
+ // Slowly rising scale towards the long-press shutdown
+diff --git a/src/buzz/buzz.h b/src/buzz/buzz.h
+index 58a7bacd7..518fd7118 100644
+--- a/src/buzz/buzz.h
++++ b/src/buzz/buzz.h
+@@ -16,6 +16,6 @@ void playLongPressLeadUp();
+ bool playNextLeadUpNote();  // Play the next note in the lead-up sequence
+ void resetLeadUpSequence(); // Reset the lead-up sequence to start from beginning
+ #if MESHTASTIC_USER_BUTTON_ACTIONS
+-bool playHintNote(int index);    // Play one note of the user button hint tune, false when past the end
++void playHintNote(int index);    // Play one note of the user button hint tune
+ void playCountUpNote(int index); // Play one note of the user button shutdown count-up
+ #endif
+\ No newline at end of file
+diff --git a/src/input/UserButtonActions.cpp b/src/input/UserButtonActions.cpp
+index 957b73f1c..1cc6c6e34 100644
+--- a/src/input/UserButtonActions.cpp
++++ b/src/input/UserButtonActions.cpp
+@@ -46,8 +46,10 @@ static int leadUpNote = -1; // last count-up note played during this press
+ 
+ bool userButtonActionsTick(bool buttonPressed, uint32_t holdMs)
+ {
+-    if (hintNote >= 0 && !playHintNote(hintNote++))
+-        hintNote = -1;
++    if (hintNote >= 0) {
++        playHintNote(hintNote);
++        hintNote = userButtonActionsNextHintNote(hintNote);
++    }
+ 
+     if (buttonPressed)
+         state.lastPressedMs = millis();
+@@ -81,6 +83,7 @@ bool userButtonActionsHandle(UserButtonGesture gesture, uint32_t holdMs, uint32_
+             state.pressConsumed = true; // until the gesture of this press (or click series) is reported
+     } else {
+         state.pressConsumed = false; // the gesture ends the press
++        state.downSeen = false;
+     }
+     switch (outcome) {
+     case UBA_OUTCOME_STOCK:
+diff --git a/src/input/UserButtonActions.h b/src/input/UserButtonActions.h
+index 8b6aab14c..3607648e4 100644
+--- a/src/input/UserButtonActions.h
++++ b/src/input/UserButtonActions.h
+@@ -127,10 +127,20 @@ struct UserButtonState {
+     bool hintPlaying = false;   // hint tune running
+     bool pressConsumed = false; // this press stopped a melody, ignore its gesture
+     uint32_t lastPressedMs = 0; // last time the button was seen pressed
++    bool downSeen = false;      // button-down of the current press was observed
++    bool nagAtDown = false;     // nag state at that button-down
+     uint32_t nowMs = 0;
+     UserButtonRateLimiter limiters[2]; // per alert level
+ };
+ 
++static const int UBA_HINT_NOTES = 5;
++
++// Hint tune note after the given one, -1 = tune over
++inline int userButtonActionsNextHintNote(int note)
++{
++    return note >= 0 && note + 1 < UBA_HINT_NOTES ? note + 1 : -1;
++}
++
+ // OneButton reports a gesture 250 ms (BUTTON_CLICK_MS) after the last release; margin included
+ static const uint32_t UBA_GESTURE_TIMEOUT_MS = 1000;
+ 
+@@ -139,6 +149,8 @@ inline void userButtonActionsPressStart(UserButtonState &state)
+ {
+     if (state.pressConsumed && state.nowMs - state.lastPressedMs > UBA_GESTURE_TIMEOUT_MS)
+         state.pressConsumed = false;
++    state.downSeen = true;
++    state.nagAtDown = state.nagging;
+ }
+ 
+ // holdMs: how long a USER_BUTTON_HOLD lasted; shutdownMs: effective long-press shutdown time
+@@ -158,7 +170,10 @@ inline UserButtonOutcome userButtonActionsResolve(const UserButtonActionsConfig
+     }
+     if (state.pressConsumed)
+         return UBA_OUTCOME_IGNORE;
+-    if (state.hintPlaying)
++    // Decide on the state at button-down: a nag or hint tune starting later does not change this press. Without an
++    // observed button-down, fall back to the current state.
++    const bool nagging = state.downSeen ? state.nagAtDown : state.nagging;
++    if (!state.downSeen && state.hintPlaying)
+         return UBA_OUTCOME_STOP_HINT;
+ 
+     UserButtonAction action;
+@@ -176,7 +191,7 @@ inline UserButtonOutcome userButtonActionsResolve(const UserButtonActionsConfig
+         if (!config.hold_alert_max_ms || config.single_press == BUTTON_ACTION_DEFAULT || holdMs >= shutdownMs)
+             return UBA_OUTCOME_STOCK;
+         if (holdMs >= config.hold_alert_max_ms)
+-            return UBA_OUTCOME_HINT;
++            return state.nagging ? UBA_OUTCOME_IGNORE : UBA_OUTCOME_HINT; // no hint tune over a notification
+         action = config.single_press;
+         break;
+     }
+@@ -189,7 +204,7 @@ inline UserButtonOutcome userButtonActionsResolve(const UserButtonActionsConfig
+         return UBA_OUTCOME_POSITION;
+     case BUTTON_ACTION_ACK_OR_ALERT:
+     case BUTTON_ACTION_ACK_OR_ALERT2:
+-        if (state.nagging)
++        if (nagging)
+             return UBA_OUTCOME_ACK;
+         // fall through
+     case BUTTON_ACTION_SEND_ALERT:
+diff --git a/test/test_user_button_actions/test_main.cpp b/test/test_user_button_actions/test_main.cpp
+index b96be66d3..3d0ef88b2 100644
+--- a/test/test_user_button_actions/test_main.cpp
++++ b/test/test_user_button_actions/test_main.cpp
+@@ -184,8 +184,9 @@ static void test_release_at_3100_ms_plays_hint()
+ static void test_medium_hold_plays_hint()
+ {
+     TEST_ASSERT_EQUAL(UBA_OUTCOME_HINT, resolve(USER_BUTTON_HOLD, 1000, 3000));
+-    state.nagging = true;
+     TEST_ASSERT_EQUAL(UBA_OUTCOME_HINT, resolve(USER_BUTTON_HOLD, 2000, SHUTDOWN_MS - 1));
++    state.nagging = true; // no hint tune over a running notification
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_IGNORE, resolve(USER_BUTTON_HOLD, 3000, 5000));
+ }
+ 
+ static void test_hold_until_shutdown_keeps_stock()
+@@ -300,6 +301,56 @@ static void test_consumed_press_without_gesture_does_not_swallow_next_click()
+     TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, 2400));
+ }
+ 
++// Button-down as the handler does it: snapshot the state for this press, then resolve
++static UserButtonOutcome buttonDown(uint32_t nowMs)
++{
++    state.nowMs = nowMs;
++    userButtonActionsPressStart(state);
++    return resolve(USER_BUTTON_DOWN, nowMs);
++}
++
++static void test_text_arriving_during_press_does_not_turn_help_into_ok()
++{
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, buttonDown(1000));
++    state.nagging = true; // a bell message arrives before the click is reported
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, 1300));
++}
++
++static void test_nag_starting_during_short_hold_still_alerts()
++{
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, buttonDown(1000));
++    state.nagging = true;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_HOLD, 3000, 2000));
++}
++
++static void test_no_hint_over_a_nag_starting_during_hold()
++{
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, buttonDown(1000));
++    state.nagging = true;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_IGNORE, resolve(USER_BUTTON_HOLD, 6000, 5000));
++}
++
++static void test_hint_ending_during_press_does_not_swallow_it()
++{
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, buttonDown(1000));
++    state.hintPlaying = true; // stale or late hint state at gesture time
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, 1300));
++}
++
++static void test_gesture_without_button_down_uses_current_nag()
++{
++    state.nagging = true;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ACK, resolve(USER_BUTTON_SINGLE, 1000));
++}
++
++static void test_hint_tune_ends_right_after_last_note()
++{
++    TEST_ASSERT_EQUAL(1, userButtonActionsNextHintNote(0));
++    TEST_ASSERT_EQUAL(UBA_HINT_NOTES - 1, userButtonActionsNextHintNote(UBA_HINT_NOTES - 2));
++    TEST_ASSERT_EQUAL(-1, userButtonActionsNextHintNote(UBA_HINT_NOTES - 1));
++    TEST_ASSERT_EQUAL(-1, userButtonActionsNextHintNote(-1));
++}
++
+ static void test_hold_reaching_shutdown_keeps_stock_shutdown()
+ {
+     TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_HOLD, 1000, 10000));
+@@ -369,6 +420,12 @@ void setup()
+     RUN_TEST(test_button_down_acks_only_with_ack_action);
+     RUN_TEST(test_consumed_press_ends_with_its_gesture);
+     RUN_TEST(test_consumed_press_without_gesture_does_not_swallow_next_click);
++    RUN_TEST(test_text_arriving_during_press_does_not_turn_help_into_ok);
++    RUN_TEST(test_nag_starting_during_short_hold_still_alerts);
++    RUN_TEST(test_no_hint_over_a_nag_starting_during_hold);
++    RUN_TEST(test_hint_ending_during_press_does_not_swallow_it);
++    RUN_TEST(test_gesture_without_button_down_uses_current_nag);
++    RUN_TEST(test_hint_tune_ends_right_after_last_note);
+     RUN_TEST(test_hold_reaching_shutdown_keeps_stock_shutdown);
+     RUN_TEST(test_lead_up_counts_up_to_shutdown);
+     RUN_TEST(test_lead_up_never_on_a_click);
+-- 
+2.54.0 (Apple Git-157)
+

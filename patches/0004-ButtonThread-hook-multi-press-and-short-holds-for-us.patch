@@ -1,7 +1,7 @@
 From a8aaf40b54c2674c9f7bc133b79cc20ca2f1bd51 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Boris=20Sta=CC=88heli?= <ich@bstaehe.li>
 Date: Wed, 21 Oct 2026 14:39:35 +0200
-Subject: [PATCH 4/8] ButtonThread: hook multi-press and short holds for user
+Subject: [PATCH 4/9] ButtonThread: hook multi-press and short holds for user
  button actions
 
 - Offer multi-press (three or more clicks) of the user button to
