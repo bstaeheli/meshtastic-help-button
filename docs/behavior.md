@@ -15,7 +15,7 @@ Preset behavior of the KidTag firmware (`rak_wismeshtag_kidtag`, `rak_wismeshtag
 - Help messages are rate-limited (preset 30 s). Presses inside the window are ignored and logged at debug level.
 - Texts are broadcast on channel index 0, port `TEXT_MESSAGE_APP`, priority `HIGH`, `want_ack = false`, and delivered to a connected phone as well.
 - The bell character (`0x07`) is part of both texts so phones and buzzers alert.
-- Texts: `kidtag` preset `\x07HILFE` / `\x07OK`; `sos` preset `\x07HELP` / `\x07OK`.
+- Texts: both presets (`kidtag`, `sos`) send `\x07HELP` / `\x07OK`.
 
 ## Come home
 
