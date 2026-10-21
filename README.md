@@ -29,9 +29,9 @@ Download the `.uf2` from the [releases](../../releases) and follow
 
 ## Usage for parents
 
-- One press when the tag is quiet: "I need help". You get a message and the position.
+- Any press (single, double, rapid) when the tag is quiet: "I need help". You get a message and the position.
 - When the tag plays its melody: come home. One press stops it and tells you the child heard it.
-- Holding the button for a long time switches the tag off. You notice because positions stop.
+- Holding the button for 15 seconds or more switches the tag off. You notice because positions stop.
 
 Details: [docs/behavior.md](docs/behavior.md). Forwarding alerts via MQTT: [docs/node-red.md](docs/node-red.md).
 

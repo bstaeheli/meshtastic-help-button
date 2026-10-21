@@ -6,6 +6,12 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- Fork updated to `a8aaf40` (review fixes): every press, rapid multi-press and short hold
+  acknowledges a nag or sends help, with a beep; rate-limited presses boop; shutdown needs a 15 s hold.
+- Preset sets `UBA_DOUBLE_PRESS` and new `UBA_MULTI_PRESS` to `ACK_OR_ALERT`.
+- Removed the `device.disable_triple_click` advice (no reader in v2.7.26).
+
 ### Fixed
 - String build flags in `config/help-button.ini` use the escaping that reaches the compiler as `"\x07HELP"`.
 - `scripts/build.sh` restores the fork `platformio.ini` on exit and skips fetch when the ref is present locally.

@@ -31,6 +31,7 @@ message UserButtonConfig {
   bool enabled = 1;
   Action single_press = 2;
   Action double_press = 3;
+  Action multi_press = 9;           // three or more rapid presses
   string alert_text = 4;            // max 50 bytes; bell prepended by firmware if missing
   bool alert_with_position = 5;
   uint32 alert_min_interval_secs = 6;
@@ -47,7 +48,8 @@ Upstream declined earlier requests mainly over accidental sends on devices witho
 - **Rate limit:** `alert_min_interval_secs` (preset 30 s); presses inside the window are ignored and logged.
 - **Acknowledge logic:** if an External Notification nag is running, the press stops it and sends the ack text instead of an alert. Replying to a "come home" never produces a false alarm.
 - **Long-press time:** `long_press_shutdown_secs` (preset 15 s) so the device is not switched off by accident in a pocket or a child's hand.
-- Gestures with other stock meanings (double, triple, quadruple press) stay unchanged by default.
+- Gestures with other stock meanings stay unchanged by default (`DEFAULT`). The preset overrides double and multi-press, making the stock ping, GPS toggle and mute unreachable.
+- Audible feedback: a beep when an alert or ack is sent, a short "boop" when rate-limited; no send, beep or window when the TX queue is full.
 
 ## Migration note
 
@@ -66,7 +68,7 @@ The build-flag config maps 1:1 to the protobuf fields (`UBA_SINGLE_PRESS` -> `si
 - Text send: `router->allocForSending()`, channel 0, `HIGH`, `want_ack = false`, `sendToMesh(p, RX_SRC_LOCAL, true)`.
 - Pure decision logic: `UserButtonGesture {USER_BUTTON_SINGLE, USER_BUTTON_DOUBLE}`, `UserButtonOutcome` (`UBA_OUTCOME_*`), `UserButtonRateLimiter`, `userButtonActionsResolve()`; unit-tested in `test_user_button_actions`.
 - Long press: stock threshold is 3900 ms (`ButtonConfig::longLongPressTime`, `uint16_t`), applied only after 30 s uptime, on release.
-- Limitations: a handled press skips the stock buzzer beep; `SEND_ALERT` does not stop a nag.
+- Limitations: `SEND_ALERT` does not stop a nag; the bell in the ack text makes sibling tags on the same channel nag.
 
 ## Test plan
 
@@ -74,7 +76,7 @@ The build-flag config maps 1:1 to the protobuf fields (`UBA_SINGLE_PRESS` -> `si
 2. App shows the upstream version; pairing, GPS, position broadcast, external notification work as before.
 3. Single press while idle: handheld receives alert text with bell plus a fresh position within seconds; a second press within the interval does nothing.
 4. Bell message to the tag: ringtone nags; single press stops it; handheld receives `OK`; no alert sent.
-5. Double press still sends ad-hoc position; quadruple press still mutes.
+5. With `DEFAULT` mapping, double press still sends ad-hoc position and quadruple press still mutes; with the preset every press behaves like a single press.
 6. Long press shorter than the configured time does nothing; longer shuts down.
 7. Flag off: firmware behaves exactly like stock (same tests as stock).
 8. Battery over 24 h unchanged versus stock.
