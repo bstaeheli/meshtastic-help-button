@@ -12,8 +12,8 @@ on:
         description: Acknowledgement text
         default: OK
       hold_secs:
-        description: Longest hold that still sends HELP (seconds)
-        default: "5"
+        description: Hold time from which a release only plays the hint tune (seconds)
+        default: "3"
       off_secs:
         description: Hold time that switches the tag off (seconds, max 65)
         default: "10"

@@ -21,7 +21,7 @@ envs=("$@")
 help=${HB_HELP_TEXT:-HELP}
 sos=${HB_SOS_TEXT:-SOS}
 ok=${HB_OK_TEXT:-OK}
-hold=${HB_HOLD_SECS:-5}
+hold=${HB_HOLD_SECS:-3}
 off=${HB_OFF_SECS:-10}
 rate=${HB_RATE_SECS:-30}
 die() { echo "error: $*" >&2; exit 2; }
