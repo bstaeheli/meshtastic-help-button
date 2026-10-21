@@ -20,7 +20,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.platformio
-          key: pio-${{ hashFiles('requirements.txt', 'config/kidtag.ini', 'FORK_REF') }}
+          key: pio-${{ hashFiles('requirements.txt', 'config/help-button.ini', 'FORK_REF') }}
           restore-keys: pio-
       - run: pip install -r requirements.txt
       - run: scripts/build.sh

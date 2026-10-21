@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the KidTag preset from the fork at FORK_REF. Usage: build.sh [env...]
+# Build the Help Button preset from the fork at FORK_REF. Usage: build.sh [env...]
 # Env: FORK_URL (default: bstaeheli/firmware), FORK_DIR (existing checkout to use).
 set -euo pipefail
 
@@ -15,7 +15,7 @@ envs=("$@")
 git -C "$FORK_DIR" fetch --tags origin
 git -C "$FORK_DIR" checkout -- platformio.ini # idempotent: drop a previous append
 git -C "$FORK_DIR" checkout "$ref"
-{ echo; cat "$root/config/kidtag.ini"; } >>"$FORK_DIR/platformio.ini"
+{ echo; cat "$root/config/help-button.ini"; } >>"$FORK_DIR/platformio.ini"
 
 rm -rf "$root/dist"
 mkdir -p "$root/dist"
@@ -23,6 +23,6 @@ for e in "${envs[@]}"; do
     (cd "$FORK_DIR" && pio run -e "$e")
     uf2=$(find "$FORK_DIR/.pio/build/$e" -name 'firmware*.uf2' | head -n1)
     [ -n "$uf2" ] || { echo "no UF2 produced for $e" >&2; exit 1; }
-    cp "$uf2" "$root/dist/kidtag-$e-$version.uf2"
+    cp "$uf2" "$root/dist/help-button-$e-$version.uf2"
 done
 (cd "$root/dist" && shasum -a 256 -- *.uf2 >SHA256SUMS)

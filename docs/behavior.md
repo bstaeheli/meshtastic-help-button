@@ -1,6 +1,6 @@
 # Behavior
 
-Preset behavior of the KidTag firmware (`rak_wismeshtag_sos`).
+Preset behavior of the Help Button firmware (`rak_wismeshtag_sos`).
 
 | Button gesture | Stock behavior | Preset behavior |
 | --- | --- | --- |
@@ -25,7 +25,7 @@ replies with the acknowledgement text. It does not send a help message.
 
 ## Build flags
 
-The flags in `config/kidtag.ini` map 1:1 to `UserButtonActionsConfig`:
+The flags in `config/help-button.ini` map 1:1 to `UserButtonActionsConfig`:
 `UBA_SINGLE_PRESS`, `UBA_DOUBLE_PRESS`, `UBA_ALERT_TEXT`, `UBA_ACK_TEXT`,
 `UBA_ALERT_WITH_POSITION`, `UBA_ALERT_MIN_INTERVAL_SECS`, `UBA_LONG_PRESS_SHUTDOWN_MS`.
 Without `MESHTASTIC_USER_BUTTON_ACTIONS=1` the firmware equals stock.

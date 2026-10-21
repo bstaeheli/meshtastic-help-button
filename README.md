@@ -1,9 +1,12 @@
-# KidTag
+# Help Button
 
-User button actions for screen-less Meshtastic trackers. A single button press on the
-tag sends a help message (bell character plus text) with the current position on the
-primary channel. If the tag is playing its "come home" melody, the same press stops it
-and tells the parents instead.
+One-button help for screen-less Meshtastic trackers. A single press sends a help message
+(bell character plus text) with the current position on the primary channel. If the
+tracker is playing a "come home" melody, the same press stops it and tells the sender
+instead, so the press doubles as an acknowledgement.
+
+Example use case: a child on a campsite carries a small tracker. One press means "I need
+help"; when the parents trigger the "come home" alert, one press confirms the child heard it.
 
 The firmware change is a small, opt-in, generic "user button actions" feature, kept on a
 fork branch that is written to be proposed upstream to
@@ -45,7 +48,7 @@ FORK_DIR=~/src/firmware scripts/build.sh   # use an existing local checkout
 ```
 
 `scripts/build.sh` checks out the fork at the commit in `FORK_REF`, appends
-`config/kidtag.ini` to its `platformio.ini`, builds, and writes UF2 files and
+`config/help-button.ini` to its `platformio.ini`, builds, and writes UF2 files and
 `SHA256SUMS` to `dist/`. `UPSTREAM_VERSION` is the stable Meshtastic tag the fork branch is based on.
 `scripts/export-patches.sh` regenerates `patches/` and `scripts/rebase.sh <tag>` moves the fork branch to a new upstream tag.
 

@@ -1,6 +1,6 @@
 # Device configuration
 
-App settings that go with the KidTag preset.
+App settings that go with the Help Button preset.
 
 - Role `CLIENT` (not `TRACKER`, which sleeps and misses the come-home message).
 - `device.disable_triple_click = true`, `device.double_tap_as_button = false`.

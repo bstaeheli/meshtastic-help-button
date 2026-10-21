@@ -9,7 +9,7 @@ or check role, channel PSK and position settings in the app).
 
 ## Flash
 
-1. Download `kidtag-<env>-<version>.uf2` from the release and check it against `SHA256SUMS`
+1. Download `help-button-<env>-<version>.uf2` from the release and check it against `SHA256SUMS`
    (`shasum -a 256 -c SHA256SUMS`).
 2. Connect the pogo-pin USB cable to the tag.
 3. Double-tap the reset button. The tag appears as a USB drive (e.g. `WISBLOCK` or similar).
