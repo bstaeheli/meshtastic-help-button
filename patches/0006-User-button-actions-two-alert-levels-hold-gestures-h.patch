@@ -1,0 +1,639 @@
+From 168f25ae7a9f88db362902c6c45be1f7005c3976 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Boris=20Sta=CC=88heli?= <ich@bstaehe.li>
+Date: Wed, 21 Oct 2026 15:33:51 +0200
+Subject: [PATCH 6/8] User button actions: two alert levels, hold gestures,
+ hint tune
+
+- Add a second alert level (BUTTON_ACTION_SEND_ALERT2,
+  BUTTON_ACTION_ACK_OR_ALERT2, alert2_text / UBA_ALERT2_TEXT, default
+  "\x07SOS"). Each level has its own rate-limit window.
+- Holds are handled on release again (USER_BUTTON_HOLD): a hold shorter
+  than hold_alert_max_ms (UBA_HOLD_ALERT_MAX_MS) runs the single press
+  action; a longer hold released before the shutdown time sends nothing
+  and plays a short, friendly hint tune. A press during the tune only
+  stops it. Holds reaching the shutdown time keep the stock shutdown on
+  release, which avoids an immediate wake-up from a still pressed button.
+- The resolver now takes the button state (nag, hint tune, time,
+  per-level limiters) and the hold duration, all covered by native
+  tests.
+---
+ src/buzz/buzz.cpp                           |  12 ++
+ src/buzz/buzz.h                             |   5 +-
+ src/input/ButtonThread.cpp                  |  16 +-
+ src/input/UserButtonActions.cpp             |  38 +++-
+ src/input/UserButtonActions.h               |  80 +++++++--
+ test/test_user_button_actions/test_main.cpp | 188 +++++++++++++++-----
+ 6 files changed, 263 insertions(+), 76 deletions(-)
+
+diff --git a/src/buzz/buzz.cpp b/src/buzz/buzz.cpp
+index 6692d996d..2447e0ce0 100644
+--- a/src/buzz/buzz.cpp
++++ b/src/buzz/buzz.cpp
+@@ -239,6 +239,18 @@ void resetLeadUpSequence()
+     leadUpNoteIndex = 0;
+ }
+ 
++#if MESHTASTIC_USER_BUTTON_ACTIONS
++// Soft, friendly up-and-down jingle (C major, mid range) for "button held, nothing was sent"
++bool playHintNote(int index)
++{
++    static const ToneDuration hintNotes[] = {{NOTE_C5, 150}, {NOTE_E5, 150}, {NOTE_G5, 150}, {NOTE_E5, 150}, {NOTE_C5, 300}};
++    if (index < 0 || index >= (int)(sizeof(hintNotes) / sizeof(ToneDuration)))
++        return false;
++    playTones(&hintNotes[index], 1);
++    return true;
++}
++#endif
++
+ void playComboTune()
+ {
+     // Quick high-pitched notes with trills
+diff --git a/src/buzz/buzz.h b/src/buzz/buzz.h
+index 1b97e24de..f4853c2fb 100644
+--- a/src/buzz/buzz.h
++++ b/src/buzz/buzz.h
+@@ -14,4 +14,7 @@ void playChirp();
+ void playClick();
+ void playLongPressLeadUp();
+ bool playNextLeadUpNote();  // Play the next note in the lead-up sequence
+-void resetLeadUpSequence(); // Reset the lead-up sequence to start from beginning
+\ No newline at end of file
++void resetLeadUpSequence(); // Reset the lead-up sequence to start from beginning
++#if MESHTASTIC_USER_BUTTON_ACTIONS
++bool playHintNote(int index); // Play one note of the user button hint tune, false when past the end
++#endif
+\ No newline at end of file
+diff --git a/src/input/ButtonThread.cpp b/src/input/ButtonThread.cpp
+index 3c6486386..cd3aa42ef 100644
+--- a/src/input/ButtonThread.cpp
++++ b/src/input/ButtonThread.cpp
+@@ -149,6 +149,10 @@ int32_t ButtonThread::runOnce()
+     // Check if we should play lead-up sound during long press
+     // Play lead-up when button has been held for BUTTON_LEADUP_MS but before long press triggers
+     bool buttonCurrentlyPressed = isButtonPressed(_pinNum);
++#if MESHTASTIC_USER_BUTTON_ACTIONS
++    if (userButtonActionsApply(_originName))
++        userButtonActionsTick(buttonCurrentlyPressed);
++#endif
+ 
+     // Detect start of button press
+     if (buttonCurrentlyPressed && !buttonWasPressed) {
+@@ -227,13 +231,6 @@ int32_t ButtonThread::runOnce()
+             // Uncommon T-Echo hardware bug, LoRa TX triggers touch button
+             if (_touchQuirk && RadioLibInterface::instance && RadioLibInterface::instance->isSending())
+                 break;
+-#if MESHTASTIC_USER_BUTTON_ACTIONS
+-            // Holding the button acts as a single press right away (OneButton reports no click after a long press)
+-            if (userButtonActionsApply(_originName) && userButtonActionsHandle(USER_BUTTON_SINGLE)) {
+-                waitingForLongPress = false;
+-                break;
+-            }
+-#endif
+ 
+             // Check if this is part of a short-press + long-press combination
+             if (_shortLong != INPUT_BROKER_NONE && waitingForLongPress &&
+@@ -324,6 +321,11 @@ int32_t ButtonThread::runOnce()
+         case BUTTON_EVENT_LONG_RELEASED: {
+ 
+             LOG_INFO("LONG PRESS RELEASE AFTER %u MILLIS", millis() - buttonPressStartTime);
++#if MESHTASTIC_USER_BUTTON_ACTIONS
++            // Shorter holds alert or play the hint; holds reaching the shutdown time fall through to stock shutdown
++            if (userButtonActionsApply(_originName))
++                userButtonActionsHandle(USER_BUTTON_HOLD, millis() - buttonPressStartTime, _longLongPressTime);
++#endif
+             // Require press started after boot holdoff to avoid phantom shutdown from floating pins
+             if (millis() > 30000 && buttonPressStartTime > 30000 && _longLongPress != INPUT_BROKER_NONE &&
+                 (millis() - buttonPressStartTime) >= _longLongPressTime && leadUpPlayed) {
+diff --git a/src/input/UserButtonActions.cpp b/src/input/UserButtonActions.cpp
+index 6336a089d..de1f5aa89 100644
+--- a/src/input/UserButtonActions.cpp
++++ b/src/input/UserButtonActions.cpp
+@@ -7,6 +7,7 @@
+ #include "Router.h"
+ #include "UserButtonActions.h"
+ #include "buzz/BuzzerFeedbackThread.h"
++#include "buzz/buzz.h"
+ #include "modules/ExternalNotificationModule.h"
+ 
+ // Same packet construction as CannedMessageModule::sendText, but broadcast on the primary channel without ack
+@@ -39,16 +40,29 @@ static void playFeedback(input_broker_event event)
+     buzzerFeedbackThread->handleInputEvent(&evt);
+ }
+ 
+-bool userButtonActionsHandle(UserButtonGesture gesture)
++static UserButtonState state;
++static const int HINT_OFF = -1, HINT_INTERRUPTED = -2; // otherwise: next hint tune note
++static int hintNote = HINT_OFF;
++
++void userButtonActionsTick(bool buttonPressed)
++{
++    if (hintNote >= 0 && buttonPressed)
++        hintNote = HINT_INTERRUPTED; // stop now, the gesture of this press only stops the tune
++    else if (hintNote >= 0 && !playHintNote(hintNote++))
++        hintNote = HINT_OFF;
++}
++
++bool userButtonActionsHandle(UserButtonGesture gesture, uint32_t holdMs, uint32_t shutdownMs)
+ {
+-    static UserButtonRateLimiter limiter;
+     const UserButtonActionsConfig &cfg = userButtonActionsConfig();
+     // Same nag check as InputBroker::handleInputEvent
+-    bool nagging =
++    state.nagging =
+         externalNotificationModule && moduleConfig.external_notification.enabled && externalNotificationModule->nagging();
++    state.hintPlaying = hintNote != HINT_OFF;
++    state.nowMs = millis();
+ 
+-    uint32_t now = millis();
+-    switch (userButtonActionsResolve(cfg, gesture, nagging, now, limiter)) {
++    UserButtonOutcome outcome = userButtonActionsResolve(cfg, state, gesture, holdMs, shutdownMs);
++    switch (outcome) {
+     case UBA_OUTCOME_STOCK:
+         return false;
+     case UBA_OUTCOME_ACK:
+@@ -59,9 +73,10 @@ bool userButtonActionsHandle(UserButtonGesture gesture)
+         playFeedback(INPUT_BROKER_USER_PRESS);
+         break;
+     case UBA_OUTCOME_ALERT:
+-        LOG_INFO("User button: send alert");
+-        sendTextBroadcast(cfg.alert_text);
+-        limiter.alertSent(now);
++    case UBA_OUTCOME_ALERT2:
++        LOG_INFO("User button: send alert level %d", outcome == UBA_OUTCOME_ALERT2 ? 2 : 1);
++        sendTextBroadcast(outcome == UBA_OUTCOME_ALERT2 ? cfg.alert2_text : cfg.alert_text);
++        state.limiters[outcome == UBA_OUTCOME_ALERT2].alertSent(state.nowMs);
+         if (cfg.alert_with_position)
+             sendAdHocPosition(false);
+         playFeedback(INPUT_BROKER_USER_PRESS);
+@@ -75,6 +90,13 @@ bool userButtonActionsHandle(UserButtonGesture gesture)
+         LOG_DEBUG("User button: alert ignored, sent less than %u s ago", (unsigned)cfg.alert_min_interval_secs);
+         playFeedback(INPUT_BROKER_CANCEL);
+         break;
++    case UBA_OUTCOME_HINT:
++        LOG_INFO("User button: held too long for an alert, nothing sent");
++        hintNote = 0;
++        break;
++    case UBA_OUTCOME_STOP_HINT:
++        hintNote = HINT_OFF;
++        break;
+     case UBA_OUTCOME_IGNORE:
+         break;
+     }
+diff --git a/src/input/UserButtonActions.h b/src/input/UserButtonActions.h
+index f2abec893..01ba1ad01 100644
+--- a/src/input/UserButtonActions.h
++++ b/src/input/UserButtonActions.h
+@@ -12,9 +12,16 @@ enum UserButtonAction : uint8_t {
+     BUTTON_ACTION_ADHOC_POSITION, // send position now
+     BUTTON_ACTION_SEND_ALERT,     // send alert text (+ position if configured)
+     BUTTON_ACTION_ACK_OR_ALERT,   // ack a running notification, otherwise send alert
++    BUTTON_ACTION_SEND_ALERT2,    // send level 2 alert text (+ position if configured)
++    BUTTON_ACTION_ACK_OR_ALERT2,  // ack a running notification, otherwise send level 2 alert
+ };
+ 
+-enum UserButtonGesture : uint8_t { USER_BUTTON_SINGLE, USER_BUTTON_DOUBLE, USER_BUTTON_MULTI };
++enum UserButtonGesture : uint8_t {
++    USER_BUTTON_SINGLE,
++    USER_BUTTON_DOUBLE,
++    USER_BUTTON_MULTI, // three or more presses
++    USER_BUTTON_HOLD,  // released after a long press
++};
+ 
+ // Fields mirror the proposed UserButtonConfig protobuf message.
+ struct UserButtonActionsConfig {
+@@ -23,10 +30,12 @@ struct UserButtonActionsConfig {
+     UserButtonAction double_press;
+     UserButtonAction multi_press; // three or more presses
+     const char *alert_text;
++    const char *alert2_text;
+     const char *ack_text; // nullptr = no ack message
+     bool alert_with_position;
+-    uint32_t alert_min_interval_secs;
+-    uint32_t long_press_shutdown_ms; // 0 = stock value
++    uint32_t alert_min_interval_secs; // per alert level
++    uint32_t hold_alert_max_ms;       // shorter holds act as single press, longer ones play a hint; 0 = holds keep stock
++    uint32_t long_press_shutdown_ms;  // 0 = stock value
+ };
+ 
+ #ifndef UBA_SINGLE_PRESS
+@@ -41,6 +50,9 @@ struct UserButtonActionsConfig {
+ #ifndef UBA_ALERT_TEXT
+ #define UBA_ALERT_TEXT "\x07HELP"
+ #endif
++#ifndef UBA_ALERT2_TEXT
++#define UBA_ALERT2_TEXT "\x07SOS"
++#endif
+ #ifndef UBA_ACK_TEXT
+ #define UBA_ACK_TEXT "\x07OK"
+ #endif
+@@ -50,6 +62,9 @@ struct UserButtonActionsConfig {
+ #ifndef UBA_ALERT_MIN_INTERVAL_SECS
+ #define UBA_ALERT_MIN_INTERVAL_SECS 30
+ #endif
++#ifndef UBA_HOLD_ALERT_MAX_MS
++#define UBA_HOLD_ALERT_MAX_MS 5000
++#endif
+ #ifndef UBA_LONG_PRESS_SHUTDOWN_MS
+ #define UBA_LONG_PRESS_SHUTDOWN_MS 0
+ #endif
+@@ -68,9 +83,11 @@ inline const UserButtonActionsConfig &userButtonActionsConfig()
+         UBA_DOUBLE_PRESS,
+         UBA_MULTI_PRESS,
+         UBA_ALERT_TEXT,
++        UBA_ALERT2_TEXT,
+         UBA_ACK_TEXT,
+         UBA_ALERT_WITH_POSITION != 0,
+         UBA_ALERT_MIN_INTERVAL_SECS,
++        UBA_HOLD_ALERT_MAX_MS,
+         UBA_LONG_PRESS_SHUTDOWN_MS,
+     };
+     return config;
+@@ -81,8 +98,11 @@ enum UserButtonOutcome : uint8_t {
+     UBA_OUTCOME_IGNORE,       // handled, do nothing
+     UBA_OUTCOME_POSITION,     // send ad-hoc position
+     UBA_OUTCOME_ALERT,        // send alert text
++    UBA_OUTCOME_ALERT2,       // send level 2 alert text
+     UBA_OUTCOME_ACK,          // stop the notification, send ack text
+     UBA_OUTCOME_RATE_LIMITED, // alert suppressed by alert_min_interval_secs
++    UBA_OUTCOME_HINT,         // nothing sent, play the hint tune
++    UBA_OUTCOME_STOP_HINT,    // stop the hint tune, nothing else
+ };
+ 
+ struct UserButtonRateLimiter {
+@@ -95,27 +115,60 @@ struct UserButtonRateLimiter {
+     }
+ };
+ 
+-inline UserButtonOutcome userButtonActionsResolve(const UserButtonActionsConfig &config, UserButtonGesture gesture, bool nagging,
+-                                                  uint32_t nowMs, const UserButtonRateLimiter &limiter)
++struct UserButtonState {
++    bool nagging = false;     // external notification running
++    bool hintPlaying = false; // hint tune running
++    uint32_t nowMs = 0;
++    UserButtonRateLimiter limiters[2]; // per alert level
++};
++
++// holdMs: how long a USER_BUTTON_HOLD lasted; shutdownMs: effective long-press shutdown time
++inline UserButtonOutcome userButtonActionsResolve(const UserButtonActionsConfig &config, const UserButtonState &state,
++                                                  UserButtonGesture gesture, uint32_t holdMs, uint32_t shutdownMs)
+ {
+     if (!config.enabled)
+         return UBA_OUTCOME_STOCK;
+-    UserButtonAction action = gesture == USER_BUTTON_SINGLE   ? config.single_press
+-                              : gesture == USER_BUTTON_DOUBLE ? config.double_press
+-                                                              : config.multi_press;
++    if (state.hintPlaying)
++        return UBA_OUTCOME_STOP_HINT;
++
++    UserButtonAction action;
++    switch (gesture) {
++    case USER_BUTTON_SINGLE:
++        action = config.single_press;
++        break;
++    case USER_BUTTON_DOUBLE:
++        action = config.double_press;
++        break;
++    case USER_BUTTON_MULTI:
++        action = config.multi_press;
++        break;
++    default: // USER_BUTTON_HOLD; holds reaching the shutdown time stay stock (shutdown)
++        if (!config.hold_alert_max_ms || config.single_press == BUTTON_ACTION_DEFAULT || holdMs >= shutdownMs)
++            return UBA_OUTCOME_STOCK;
++        if (holdMs >= config.hold_alert_max_ms)
++            return UBA_OUTCOME_HINT;
++        action = config.single_press;
++        break;
++    }
++
++    const bool level2 = action == BUTTON_ACTION_SEND_ALERT2 || action == BUTTON_ACTION_ACK_OR_ALERT2;
+     switch (action) {
+     case BUTTON_ACTION_NONE:
+         return UBA_OUTCOME_IGNORE;
+     case BUTTON_ACTION_ADHOC_POSITION:
+         return UBA_OUTCOME_POSITION;
+     case BUTTON_ACTION_ACK_OR_ALERT:
+-        if (nagging)
++    case BUTTON_ACTION_ACK_OR_ALERT2:
++        if (state.nagging)
+             return UBA_OUTCOME_ACK;
+         // fall through
+     case BUTTON_ACTION_SEND_ALERT:
+-        if (limiter.sent && nowMs - limiter.lastMs < config.alert_min_interval_secs * 1000)
++    case BUTTON_ACTION_SEND_ALERT2: {
++        const UserButtonRateLimiter &limiter = state.limiters[level2];
++        if (limiter.sent && state.nowMs - limiter.lastMs < config.alert_min_interval_secs * 1000)
+             return UBA_OUTCOME_RATE_LIMITED;
+-        return UBA_OUTCOME_ALERT; // caller calls limiter.alertSent() once the alert went out
++        return level2 ? UBA_OUTCOME_ALERT2 : UBA_OUTCOME_ALERT; // caller calls alertSent() once the alert went out
++    }
+     default:
+         return UBA_OUTCOME_STOCK;
+     }
+@@ -130,4 +183,7 @@ inline uint32_t userButtonActionsLeadUpMs(uint32_t shutdownMs, uint32_t stockLea
+ }
+ 
+ // Runs the configured action. Returns true if the gesture was handled and stock handling must be skipped.
+-bool userButtonActionsHandle(UserButtonGesture gesture);
++bool userButtonActionsHandle(UserButtonGesture gesture, uint32_t holdMs = 0, uint32_t shutdownMs = 0);
++
++// Plays the hint tune one note per call; call regularly from the button thread. A press stops the tune.
++void userButtonActionsTick(bool buttonPressed);
+diff --git a/test/test_user_button_actions/test_main.cpp b/test/test_user_button_actions/test_main.cpp
+index b4ea29d69..9c669d87d 100644
+--- a/test/test_user_button_actions/test_main.cpp
++++ b/test/test_user_button_actions/test_main.cpp
+@@ -4,7 +4,9 @@
+ #include <unity.h>
+ 
+ static UserButtonActionsConfig cfg;
+-static UserButtonRateLimiter limiter;
++static UserButtonState state;
++
++static const uint32_t SHUTDOWN_MS = 10000;
+ 
+ void setUp(void)
+ {
+@@ -13,17 +15,20 @@ void setUp(void)
+     cfg.single_press = BUTTON_ACTION_ACK_OR_ALERT;
+     cfg.double_press = BUTTON_ACTION_DEFAULT;
+     cfg.alert_min_interval_secs = 30;
+-    limiter = UserButtonRateLimiter();
++    cfg.hold_alert_max_ms = 5000;
++    cfg.long_press_shutdown_ms = SHUTDOWN_MS;
++    state = UserButtonState();
+ }
+ 
+ void tearDown(void) {}
+ 
+-// Resolve a press; a resolved alert counts as successfully sent
+-static UserButtonOutcome resolve(UserButtonGesture gesture, bool nagging, uint32_t nowMs)
++// Resolve a gesture at nowMs; a resolved alert counts as sent
++static UserButtonOutcome resolve(UserButtonGesture gesture, uint32_t nowMs, uint32_t holdMs = 0)
+ {
+-    UserButtonOutcome outcome = userButtonActionsResolve(cfg, gesture, nagging, nowMs, limiter);
+-    if (outcome == UBA_OUTCOME_ALERT)
+-        limiter.alertSent(nowMs);
++    state.nowMs = nowMs;
++    UserButtonOutcome outcome = userButtonActionsResolve(cfg, state, gesture, holdMs, SHUTDOWN_MS);
++    if (outcome == UBA_OUTCOME_ALERT || outcome == UBA_OUTCOME_ALERT2)
++        state.limiters[outcome == UBA_OUTCOME_ALERT2].alertSent(nowMs);
+     return outcome;
+ }
+ 
+@@ -35,108 +40,187 @@ static void test_build_flag_defaults_are_stock()
+     TEST_ASSERT_EQUAL(BUTTON_ACTION_DEFAULT, c.double_press);
+     TEST_ASSERT_EQUAL(BUTTON_ACTION_DEFAULT, c.multi_press);
+     TEST_ASSERT_EQUAL_STRING("\x07HELP", c.alert_text);
++    TEST_ASSERT_EQUAL_STRING("\x07SOS", c.alert2_text);
+     TEST_ASSERT_EQUAL_STRING("\x07OK", c.ack_text);
+     TEST_ASSERT_TRUE(c.alert_with_position);
+     TEST_ASSERT_EQUAL_UINT32(30, c.alert_min_interval_secs);
++    TEST_ASSERT_EQUAL_UINT32(5000, c.hold_alert_max_ms);
+     TEST_ASSERT_EQUAL_UINT32(0, c.long_press_shutdown_ms);
+ }
+ 
+ static void test_disabled_keeps_stock()
+ {
+     cfg.enabled = false;
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_SINGLE, false, 1000));
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_SINGLE, true, 1000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_SINGLE, 1000));
++    state.nagging = true;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_SINGLE, 1000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_HOLD, 1000, 6000));
+ }
+ 
+ static void test_default_action_keeps_stock()
+ {
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_DOUBLE, false, 1000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_DOUBLE, 1000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_MULTI, 1000));
+ }
+ 
+ static void test_none_swallows_gesture()
+ {
+     cfg.double_press = BUTTON_ACTION_NONE;
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_IGNORE, resolve(USER_BUTTON_DOUBLE, true, 1000));
++    state.nagging = true;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_IGNORE, resolve(USER_BUTTON_DOUBLE, 1000));
+ }
+ 
+ static void test_adhoc_position()
+ {
+     cfg.double_press = BUTTON_ACTION_ADHOC_POSITION;
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_POSITION, resolve(USER_BUTTON_DOUBLE, false, 1000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_POSITION, resolve(USER_BUTTON_DOUBLE, 1000));
+ }
+ 
+-static void test_ack_or_alert_acks_while_nagging()
++static void test_ack_or_alert_alerts_when_idle()
+ {
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_ACK, resolve(USER_BUTTON_SINGLE, true, 1000));
+-    // acks are never rate-limited and do not consume the alert window
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_ACK, resolve(USER_BUTTON_SINGLE, true, 1100));
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, false, 1200));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, 1000));
+ }
+ 
+-static void test_multi_press_uses_its_own_action()
++static void test_ack_or_alert_acks_while_nagging()
+ {
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_MULTI, false, 1000));
+-    cfg.multi_press = BUTTON_ACTION_ACK_OR_ALERT;
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_MULTI, false, 1000));
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_ACK, resolve(USER_BUTTON_MULTI, true, 1100));
++    state.nagging = true;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ACK, resolve(USER_BUTTON_SINGLE, 1000));
++    // acks are never rate-limited and do not consume the alert window
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ACK, resolve(USER_BUTTON_SINGLE, 1100));
++    state.nagging = false;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, 1200));
+ }
+ 
+ static void test_ack_inside_alert_window()
+ {
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, false, 1000));
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_ACK, resolve(USER_BUTTON_SINGLE, true, 2000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, 1000));
++    state.nagging = true;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ACK, resolve(USER_BUTTON_SINGLE, 2000));
+ }
+ 
+-static void test_resolve_does_not_start_window()
++static void test_send_alert_ignores_nag()
+ {
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, userButtonActionsResolve(cfg, USER_BUTTON_SINGLE, false, 1000, limiter));
+-    // the window starts only with alertSent(), after the alert was sent
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, userButtonActionsResolve(cfg, USER_BUTTON_SINGLE, false, 1100, limiter));
++    cfg.single_press = BUTTON_ACTION_SEND_ALERT;
++    state.nagging = true;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, 1000));
+ }
+ 
+-static void test_ack_or_alert_alerts_when_idle()
++static void test_level2_alert_and_ack()
+ {
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, false, 1000));
++    cfg.double_press = BUTTON_ACTION_ACK_OR_ALERT2;
++    cfg.multi_press = BUTTON_ACTION_SEND_ALERT2;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT2, resolve(USER_BUTTON_DOUBLE, 1000));
++    state.nagging = true;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ACK, resolve(USER_BUTTON_DOUBLE, 1100));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_RATE_LIMITED, resolve(USER_BUTTON_MULTI, 1200));
+ }
+ 
+-static void test_send_alert_ignores_nag()
++static void test_alert_levels_have_separate_windows()
+ {
+-    cfg.single_press = BUTTON_ACTION_SEND_ALERT;
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, true, 1000));
++    cfg.double_press = BUTTON_ACTION_ACK_OR_ALERT2;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, 1000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT2, resolve(USER_BUTTON_DOUBLE, 2000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_RATE_LIMITED, resolve(USER_BUTTON_SINGLE, 3000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_RATE_LIMITED, resolve(USER_BUTTON_DOUBLE, 4000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, 31000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT2, resolve(USER_BUTTON_DOUBLE, 32000));
+ }
+ 
+ static void test_alert_rate_limited_within_interval()
+ {
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, false, 1000));
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_RATE_LIMITED, resolve(USER_BUTTON_SINGLE, false, 1000 + 29999));
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, false, 1000 + 30000));
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_RATE_LIMITED, resolve(USER_BUTTON_SINGLE, false, 1000 + 30001));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, 1000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_RATE_LIMITED, resolve(USER_BUTTON_SINGLE, 1000 + 29999));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, 1000 + 30000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_RATE_LIMITED, resolve(USER_BUTTON_SINGLE, 1000 + 30001));
++}
++
++static void test_resolve_does_not_start_window()
++{
++    state.nowMs = 1000;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, userButtonActionsResolve(cfg, state, USER_BUTTON_SINGLE, 0, SHUTDOWN_MS));
++    // the window starts only with alertSent(), after the alert was sent
++    state.nowMs = 1100;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, userButtonActionsResolve(cfg, state, USER_BUTTON_SINGLE, 0, SHUTDOWN_MS));
+ }
+ 
+ static void test_first_alert_allowed_right_after_boot()
+ {
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, false, 0));
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_RATE_LIMITED, resolve(USER_BUTTON_SINGLE, false, 10));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, 0));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_RATE_LIMITED, resolve(USER_BUTTON_SINGLE, 10));
+ }
+ 
+ static void test_rate_limit_survives_millis_wraparound()
+ {
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, false, UINT32_MAX - 1000));
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_RATE_LIMITED, resolve(USER_BUTTON_SINGLE, false, 1000));
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, false, 30000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, UINT32_MAX - 1000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_RATE_LIMITED, resolve(USER_BUTTON_SINGLE, 1000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, 30000));
+ }
+ 
+ static void test_zero_interval_never_limits()
+ {
+     cfg.alert_min_interval_secs = 0;
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, false, 1000));
+-    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, false, 1000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, 1000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, 1000));
++}
++
++static void test_short_hold_acts_as_single_press()
++{
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_HOLD, 1000, 500));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_RATE_LIMITED, resolve(USER_BUTTON_HOLD, 2000, 4999));
++    state.nagging = true;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ACK, resolve(USER_BUTTON_HOLD, 3000, 4999));
++}
++
++static void test_medium_hold_plays_hint()
++{
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_HINT, resolve(USER_BUTTON_HOLD, 1000, 5000));
++    state.nagging = true;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_HINT, resolve(USER_BUTTON_HOLD, 2000, SHUTDOWN_MS - 1));
++}
++
++static void test_hold_until_shutdown_keeps_stock()
++{
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_HOLD, 1000, SHUTDOWN_MS));
++    state.nagging = true;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_HOLD, 2000, 60000));
++}
++
++static void test_hold_with_stock_shutdown_time()
++{
++    // stock shutdown (3900 ms) comes before hold_alert_max_ms: no hint, holds beyond it shut down
++    state.nowMs = 1000;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, userButtonActionsResolve(cfg, state, USER_BUTTON_HOLD, 3000, 3900));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, userButtonActionsResolve(cfg, state, USER_BUTTON_HOLD, 4000, 3900));
++}
++
++static void test_hold_alert_disabled()
++{
++    cfg.hold_alert_max_ms = 0;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_HOLD, 1000, 1000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_HOLD, 1000, 6000));
++}
++
++static void test_hold_with_default_single_press_keeps_stock()
++{
++    cfg.single_press = BUTTON_ACTION_DEFAULT;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_HOLD, 1000, 1000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_HOLD, 1000, 6000));
++}
++
++static void test_press_during_hint_only_stops_it()
++{
++    state.hintPlaying = true;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOP_HINT, resolve(USER_BUTTON_SINGLE, 1000));
++    state.nagging = true;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOP_HINT, resolve(USER_BUTTON_SINGLE, 1100));
++    state.hintPlaying = false;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ACK, resolve(USER_BUTTON_SINGLE, 1200));
+ }
+ 
+ static void test_lead_up_ends_at_shutdown_time()
+ {
+     TEST_ASSERT_EQUAL_UINT32(2200, userButtonActionsLeadUpMs(0, 2200)); // no override: stock
+-    TEST_ASSERT_EQUAL_UINT32(13700, userButtonActionsLeadUpMs(15000, 2200));
++    TEST_ASSERT_EQUAL_UINT32(8700, userButtonActionsLeadUpMs(10000, 2200));
+     TEST_ASSERT_EQUAL_UINT32(2200, userButtonActionsLeadUpMs(1300, 2200)); // too short to shift
+ }
+ 
+@@ -150,16 +234,24 @@ void setup()
+     RUN_TEST(test_default_action_keeps_stock);
+     RUN_TEST(test_none_swallows_gesture);
+     RUN_TEST(test_adhoc_position);
++    RUN_TEST(test_ack_or_alert_alerts_when_idle);
+     RUN_TEST(test_ack_or_alert_acks_while_nagging);
+-    RUN_TEST(test_multi_press_uses_its_own_action);
+     RUN_TEST(test_ack_inside_alert_window);
+-    RUN_TEST(test_resolve_does_not_start_window);
+-    RUN_TEST(test_ack_or_alert_alerts_when_idle);
+     RUN_TEST(test_send_alert_ignores_nag);
++    RUN_TEST(test_level2_alert_and_ack);
++    RUN_TEST(test_alert_levels_have_separate_windows);
+     RUN_TEST(test_alert_rate_limited_within_interval);
++    RUN_TEST(test_resolve_does_not_start_window);
+     RUN_TEST(test_first_alert_allowed_right_after_boot);
+     RUN_TEST(test_rate_limit_survives_millis_wraparound);
+     RUN_TEST(test_zero_interval_never_limits);
++    RUN_TEST(test_short_hold_acts_as_single_press);
++    RUN_TEST(test_medium_hold_plays_hint);
++    RUN_TEST(test_hold_until_shutdown_keeps_stock);
++    RUN_TEST(test_hold_with_stock_shutdown_time);
++    RUN_TEST(test_hold_alert_disabled);
++    RUN_TEST(test_hold_with_default_single_press_keeps_stock);
++    RUN_TEST(test_press_during_hint_only_stops_it);
+     RUN_TEST(test_lead_up_ends_at_shutdown_time);
+     exit(UNITY_END());
+ }
+-- 
+2.54.0 (Apple Git-157)
+

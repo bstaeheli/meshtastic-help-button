@@ -1,0 +1,199 @@
+From bb107ef74adde419cd33929c69beb5b4eeacced4 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Boris=20Sta=CC=88heli?= <ich@bstaehe.li>
+Date: Wed, 21 Oct 2026 15:02:19 +0200
+Subject: [PATCH 5/8] User button actions: act on hold start, lead-up melody
+ ends at shutdown
+
+- A hold of the user button runs the single press action as soon as it
+  is recognized as a long press (~500 ms) instead of on release, so a
+  hold until shutdown still sends the alert first. OneButton reports no
+  click after a long press, so there is no double action.
+- With long_press_shutdown_ms set, the stock lead-up melody is shifted so
+  that it ends at the shutdown time and again means "release now to
+  turn off".
+- Drop the TX queue pre-check before sending the alert and ack texts:
+  MeshPacketQueue::enqueue evicts lower-priority packets for these HIGH
+  priority packets. The rate-limit window starts after sending.
+---
+ src/input/ButtonThread.cpp                  | 23 ++++++++++++++-------
+ src/input/ButtonThread.h                    |  3 +++
+ src/input/UserButtonActions.cpp             | 10 ++-------
+ src/input/UserButtonActions.h               |  8 +++++++
+ test/test_user_button_actions/test_main.cpp | 14 ++++++++++---
+ 5 files changed, 40 insertions(+), 18 deletions(-)
+
+diff --git a/src/input/ButtonThread.cpp b/src/input/ButtonThread.cpp
+index cf8c29346..3c6486386 100644
+--- a/src/input/ButtonThread.cpp
++++ b/src/input/ButtonThread.cpp
+@@ -52,8 +52,10 @@ bool ButtonThread::initButton(const ButtonConfig &config)
+     _longLongPress = config.longLongPress;
+ #if MESHTASTIC_USER_BUTTON_ACTIONS
+     if (userButtonActionsApply(_originName) && _longLongPress == INPUT_BROKER_SHUTDOWN &&
+-        userButtonActionsConfig().long_press_shutdown_ms)
++        userButtonActionsConfig().long_press_shutdown_ms) {
+         _longLongPressTime = userButtonActionsConfig().long_press_shutdown_ms;
++        _leadUpMs = userButtonActionsLeadUpMs(_longLongPressTime, BUTTON_LEADUP_MS);
++    }
+ #endif
+ 
+     userButton = OneButton(config.pinNumber, config.activeLow, config.activePullup);
+@@ -162,8 +164,13 @@ int32_t ButtonThread::runOnce()
+         LOG_WARN("Button held for %u ms", millis() - buttonPressStartTime);
+ #endif
+ 
++#if MESHTASTIC_USER_BUTTON_ACTIONS
++    const uint32_t leadUpMs = _leadUpMs;
++#else
++    const uint32_t leadUpMs = BUTTON_LEADUP_MS;
++#endif
+     // Progressive lead-up sound system
+-    if (!_suppressLeadUp && buttonCurrentlyPressed && (millis() - buttonPressStartTime) >= BUTTON_LEADUP_MS) {
++    if (!_suppressLeadUp && buttonCurrentlyPressed && (millis() - buttonPressStartTime) >= leadUpMs) {
+ 
+         // Start the progressive sequence if not already active
+         if (!leadUpSequenceActive) {
+@@ -220,6 +227,13 @@ int32_t ButtonThread::runOnce()
+             // Uncommon T-Echo hardware bug, LoRa TX triggers touch button
+             if (_touchQuirk && RadioLibInterface::instance && RadioLibInterface::instance->isSending())
+                 break;
++#if MESHTASTIC_USER_BUTTON_ACTIONS
++            // Holding the button acts as a single press right away (OneButton reports no click after a long press)
++            if (userButtonActionsApply(_originName) && userButtonActionsHandle(USER_BUTTON_SINGLE)) {
++                waitingForLongPress = false;
++                break;
++            }
++#endif
+ 
+             // Check if this is part of a short-press + long-press combination
+             if (_shortLong != INPUT_BROKER_NONE && waitingForLongPress &&
+@@ -310,11 +324,6 @@ int32_t ButtonThread::runOnce()
+         case BUTTON_EVENT_LONG_RELEASED: {
+ 
+             LOG_INFO("LONG PRESS RELEASE AFTER %u MILLIS", millis() - buttonPressStartTime);
+-#if MESHTASTIC_USER_BUTTON_ACTIONS
+-            // A hold released before the shutdown time counts as a single press
+-            if (userButtonActionsApply(_originName) && (millis() - buttonPressStartTime) < _longLongPressTime)
+-                userButtonActionsHandle(USER_BUTTON_SINGLE);
+-#endif
+             // Require press started after boot holdoff to avoid phantom shutdown from floating pins
+             if (millis() > 30000 && buttonPressStartTime > 30000 && _longLongPress != INPUT_BROKER_NONE &&
+                 (millis() - buttonPressStartTime) >= _longLongPressTime && leadUpPlayed) {
+diff --git a/src/input/ButtonThread.h b/src/input/ButtonThread.h
+index e724c3596..15e019dc3 100644
+--- a/src/input/ButtonThread.h
++++ b/src/input/ButtonThread.h
+@@ -103,6 +103,9 @@ class ButtonThread : public Observable<const InputEvent *>, public concurrency::
+     uint16_t _longPressTime = 500;
+     uint16_t _longLongPressTime = 3900;
+     int _pinNum = 0;
++#if MESHTASTIC_USER_BUTTON_ACTIONS
++    uint32_t _leadUpMs = BUTTON_LEADUP_MS;
++#endif
+     bool _activeLow = true;
+     bool _touchQuirk = false;
+ 
+diff --git a/src/input/UserButtonActions.cpp b/src/input/UserButtonActions.cpp
+index 89e70beaf..6336a089d 100644
+--- a/src/input/UserButtonActions.cpp
++++ b/src/input/UserButtonActions.cpp
+@@ -10,12 +10,8 @@
+ #include "modules/ExternalNotificationModule.h"
+ 
+ // Same packet construction as CannedMessageModule::sendText, but broadcast on the primary channel without ack
+-static bool sendTextBroadcast(const char *text)
++static void sendTextBroadcast(const char *text)
+ {
+-    if (router->getQueueStatus().free == 0) {
+-        LOG_WARN("User button: TX queue full, text not sent");
+-        return false;
+-    }
+     meshtastic_MeshPacket *p = router->allocForSending();
+     p->to = NODENUM_BROADCAST;
+     p->channel = 0;
+@@ -25,7 +21,6 @@ static bool sendTextBroadcast(const char *text)
+     p->decoded.payload.size = strnlen(text, sizeof(p->decoded.payload.bytes));
+     memcpy(p->decoded.payload.bytes, text, p->decoded.payload.size);
+     service->sendToMesh(p, RX_SRC_LOCAL, true);
+-    return true;
+ }
+ 
+ // Same as the stock double press (INPUT_BROKER_SEND_PING in SystemCommandsModule)
+@@ -65,8 +60,7 @@ bool userButtonActionsHandle(UserButtonGesture gesture)
+         break;
+     case UBA_OUTCOME_ALERT:
+         LOG_INFO("User button: send alert");
+-        if (!sendTextBroadcast(cfg.alert_text))
+-            break; // no rate-limit window, the next press retries
++        sendTextBroadcast(cfg.alert_text);
+         limiter.alertSent(now);
+         if (cfg.alert_with_position)
+             sendAdHocPosition(false);
+diff --git a/src/input/UserButtonActions.h b/src/input/UserButtonActions.h
+index 839473db2..f2abec893 100644
+--- a/src/input/UserButtonActions.h
++++ b/src/input/UserButtonActions.h
+@@ -121,5 +121,13 @@ inline UserButtonOutcome userButtonActionsResolve(const UserButtonActionsConfig
+     }
+ }
+ 
++// When the long-press shutdown time is overridden, start the stock lead-up melody (4 notes, 400 ms apart) so that it
++// ends at the shutdown time: the melody means "release now and the device turns off".
++inline uint32_t userButtonActionsLeadUpMs(uint32_t shutdownMs, uint32_t stockLeadUpMs)
++{
++    const uint32_t leadUpDurationMs = 1300;
++    return shutdownMs > leadUpDurationMs ? shutdownMs - leadUpDurationMs : stockLeadUpMs;
++}
++
+ // Runs the configured action. Returns true if the gesture was handled and stock handling must be skipped.
+ bool userButtonActionsHandle(UserButtonGesture gesture);
+diff --git a/test/test_user_button_actions/test_main.cpp b/test/test_user_button_actions/test_main.cpp
+index 45a6ffaf5..b4ea29d69 100644
+--- a/test/test_user_button_actions/test_main.cpp
++++ b/test/test_user_button_actions/test_main.cpp
+@@ -87,10 +87,10 @@ static void test_ack_inside_alert_window()
+     TEST_ASSERT_EQUAL(UBA_OUTCOME_ACK, resolve(USER_BUTTON_SINGLE, true, 2000));
+ }
+ 
+-static void test_failed_alert_does_not_start_window()
++static void test_resolve_does_not_start_window()
+ {
+     TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, userButtonActionsResolve(cfg, USER_BUTTON_SINGLE, false, 1000, limiter));
+-    // not committed via alertSent(), so the next press may retry
++    // the window starts only with alertSent(), after the alert was sent
+     TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, userButtonActionsResolve(cfg, USER_BUTTON_SINGLE, false, 1100, limiter));
+ }
+ 
+@@ -133,6 +133,13 @@ static void test_zero_interval_never_limits()
+     TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, false, 1000));
+ }
+ 
++static void test_lead_up_ends_at_shutdown_time()
++{
++    TEST_ASSERT_EQUAL_UINT32(2200, userButtonActionsLeadUpMs(0, 2200)); // no override: stock
++    TEST_ASSERT_EQUAL_UINT32(13700, userButtonActionsLeadUpMs(15000, 2200));
++    TEST_ASSERT_EQUAL_UINT32(2200, userButtonActionsLeadUpMs(1300, 2200)); // too short to shift
++}
++
+ void setup()
+ {
+     initializeTestEnvironment();
+@@ -146,13 +153,14 @@ void setup()
+     RUN_TEST(test_ack_or_alert_acks_while_nagging);
+     RUN_TEST(test_multi_press_uses_its_own_action);
+     RUN_TEST(test_ack_inside_alert_window);
+-    RUN_TEST(test_failed_alert_does_not_start_window);
++    RUN_TEST(test_resolve_does_not_start_window);
+     RUN_TEST(test_ack_or_alert_alerts_when_idle);
+     RUN_TEST(test_send_alert_ignores_nag);
+     RUN_TEST(test_alert_rate_limited_within_interval);
+     RUN_TEST(test_first_alert_allowed_right_after_boot);
+     RUN_TEST(test_rate_limit_survives_millis_wraparound);
+     RUN_TEST(test_zero_interval_never_limits);
++    RUN_TEST(test_lead_up_ends_at_shutdown_time);
+     exit(UNITY_END());
+ }
+ 
+-- 
+2.54.0 (Apple Git-157)
+

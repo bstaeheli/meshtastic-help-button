@@ -1,0 +1,100 @@
+From a0b46e2358f58094c7ed22a0102e48f2699625b3 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Boris=20Sta=CC=88heli?= <ich@bstaehe.li>
+Date: Wed, 21 Oct 2026 16:18:12 +0200
+Subject: [PATCH 8/8] User button actions: do not let a lost gesture swallow
+ the next press
+
+If a press that stopped a melody never gets a gesture reported (e.g. a
+very short bounce), the next button-down more than 1 s after the button
+was last seen pressed starts a new press instead of being ignored.
+---
+ src/input/UserButtonActions.cpp             |  5 +++++
+ src/input/UserButtonActions.h               | 11 +++++++++++
+ test/test_user_button_actions/test_main.cpp | 15 +++++++++++++++
+ 3 files changed, 31 insertions(+)
+
+diff --git a/src/input/UserButtonActions.cpp b/src/input/UserButtonActions.cpp
+index 2047ed0b2..957b73f1c 100644
+--- a/src/input/UserButtonActions.cpp
++++ b/src/input/UserButtonActions.cpp
+@@ -49,6 +49,9 @@ bool userButtonActionsTick(bool buttonPressed, uint32_t holdMs)
+     if (hintNote >= 0 && !playHintNote(hintNote++))
+         hintNote = -1;
+ 
++    if (buttonPressed)
++        state.lastPressedMs = millis();
++
+     const UserButtonActionsConfig &cfg = userButtonActionsConfig();
+     if (!buttonPressed || state.pressConsumed || !cfg.long_press_shutdown_ms)
+         return false;
+@@ -68,6 +71,8 @@ bool userButtonActionsHandle(UserButtonGesture gesture, uint32_t holdMs, uint32_
+         externalNotificationModule && moduleConfig.external_notification.enabled && externalNotificationModule->nagging();
+     state.hintPlaying = hintNote >= 0;
+     state.nowMs = millis();
++    if (gesture == USER_BUTTON_DOWN)
++        userButtonActionsPressStart(state);
+ 
+     UserButtonOutcome outcome = userButtonActionsResolve(cfg, state, gesture, holdMs, shutdownMs);
+     if (gesture == USER_BUTTON_DOWN) {
+diff --git a/src/input/UserButtonActions.h b/src/input/UserButtonActions.h
+index 9c189ad56..8b6aab14c 100644
+--- a/src/input/UserButtonActions.h
++++ b/src/input/UserButtonActions.h
+@@ -126,10 +126,21 @@ struct UserButtonState {
+     bool nagging = false;       // external notification running
+     bool hintPlaying = false;   // hint tune running
+     bool pressConsumed = false; // this press stopped a melody, ignore its gesture
++    uint32_t lastPressedMs = 0; // last time the button was seen pressed
+     uint32_t nowMs = 0;
+     UserButtonRateLimiter limiters[2]; // per alert level
+ };
+ 
++// OneButton reports a gesture 250 ms (BUTTON_CLICK_MS) after the last release; margin included
++static const uint32_t UBA_GESTURE_TIMEOUT_MS = 1000;
++
++// Call at button-down: a consumed press whose gesture never arrived must not swallow a later press
++inline void userButtonActionsPressStart(UserButtonState &state)
++{
++    if (state.pressConsumed && state.nowMs - state.lastPressedMs > UBA_GESTURE_TIMEOUT_MS)
++        state.pressConsumed = false;
++}
++
+ // holdMs: how long a USER_BUTTON_HOLD lasted; shutdownMs: effective long-press shutdown time
+ inline UserButtonOutcome userButtonActionsResolve(const UserButtonActionsConfig &config, const UserButtonState &state,
+                                                   UserButtonGesture gesture, uint32_t holdMs, uint32_t shutdownMs)
+diff --git a/test/test_user_button_actions/test_main.cpp b/test/test_user_button_actions/test_main.cpp
+index 92327bd1c..b96be66d3 100644
+--- a/test/test_user_button_actions/test_main.cpp
++++ b/test/test_user_button_actions/test_main.cpp
+@@ -286,6 +286,20 @@ static void test_consumed_press_ends_with_its_gesture()
+     TEST_ASSERT_EQUAL(UBA_OUTCOME_IGNORE, resolve(USER_BUTTON_SINGLE, 1000));
+ }
+ 
++static void test_consumed_press_without_gesture_does_not_swallow_next_click()
++{
++    // a press stopped a melody, but no gesture was ever reported for it; last seen pressed at 1000 ms
++    state.pressConsumed = true;
++    state.lastPressedMs = 1000;
++    state.nowMs = 1500; // next button-down within the click series: still the same press
++    userButtonActionsPressStart(state);
++    TEST_ASSERT_TRUE(state.pressConsumed);
++    state.nowMs = 2100; // next button-down later: a new press
++    userButtonActionsPressStart(state);
++    TEST_ASSERT_FALSE(state.pressConsumed);
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, 2400));
++}
++
+ static void test_hold_reaching_shutdown_keeps_stock_shutdown()
+ {
+     TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_HOLD, 1000, 10000));
+@@ -354,6 +368,7 @@ void setup()
+     RUN_TEST(test_button_down_without_melody_does_nothing);
+     RUN_TEST(test_button_down_acks_only_with_ack_action);
+     RUN_TEST(test_consumed_press_ends_with_its_gesture);
++    RUN_TEST(test_consumed_press_without_gesture_does_not_swallow_next_click);
+     RUN_TEST(test_hold_reaching_shutdown_keeps_stock_shutdown);
+     RUN_TEST(test_lead_up_counts_up_to_shutdown);
+     RUN_TEST(test_lead_up_never_on_a_click);
+-- 
+2.54.0 (Apple Git-157)
+
