@@ -1,0 +1,361 @@
+From d89648c49aee6c6067cf5e051be8f62af747591d Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Boris=20Sta=CC=88heli?= <ich@bstaehe.li>
+Date: Wed, 21 Oct 2026 14:03:10 +0200
+Subject: [PATCH 1/2] Add configurable user button actions
+
+Add UserButtonActions, an opt-in mapping from user button gestures to
+actions for devices without a screen: send an alert text (optionally
+followed by an ad-hoc position), acknowledge a running external
+notification nag with a reply text, send a position, or do nothing.
+
+Settings are read through UserButtonActionsConfig, whose fields mirror a
+possible future module config message. For now it is filled from build
+flags (UBA_*) with neutral English defaults. Alerts are rate-limited by
+alert_min_interval_secs.
+
+Everything outside the hardware-free decision logic is compiled only with
+MESHTASTIC_USER_BUTTON_ACTIONS (default off). The decision logic is
+covered by native unit tests in test/test_user_button_actions.
+---
+ src/input/UserButtonActions.cpp             |  69 +++++++++++
+ src/input/UserButtonActions.h               | 114 +++++++++++++++++
+ test/test_user_button_actions/test_main.cpp | 130 ++++++++++++++++++++
+ 3 files changed, 313 insertions(+)
+ create mode 100644 src/input/UserButtonActions.cpp
+ create mode 100644 src/input/UserButtonActions.h
+ create mode 100644 test/test_user_button_actions/test_main.cpp
+
+diff --git a/src/input/UserButtonActions.cpp b/src/input/UserButtonActions.cpp
+new file mode 100644
+index 000000000..407da840e
+--- /dev/null
++++ b/src/input/UserButtonActions.cpp
+@@ -0,0 +1,69 @@
++#include "configuration.h"
++
++#if MESHTASTIC_USER_BUTTON_ACTIONS
++#include "MeshService.h"
++#include "NodeDB.h"
++#include "PowerFSM.h"
++#include "Router.h"
++#include "UserButtonActions.h"
++#include "modules/ExternalNotificationModule.h"
++
++// Same packet construction as CannedMessageModule::sendText, but broadcast on the primary channel without ack
++static void sendTextBroadcast(const char *text)
++{
++    meshtastic_MeshPacket *p = router->allocForSending();
++    p->to = NODENUM_BROADCAST;
++    p->channel = 0;
++    p->want_ack = false;
++    p->priority = meshtastic_MeshPacket_Priority_HIGH;
++    p->decoded.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
++    p->decoded.payload.size = strnlen(text, sizeof(p->decoded.payload.bytes));
++    memcpy(p->decoded.payload.bytes, text, p->decoded.payload.size);
++    service->sendToMesh(p, RX_SRC_LOCAL, true);
++}
++
++// Same as the stock double press (INPUT_BROKER_SEND_PING in SystemCommandsModule)
++static void sendAdHocPosition()
++{
++    service->refreshLocalMeshNode();
++    service->trySendPosition(NODENUM_BROADCAST, true);
++}
++
++bool userButtonActionsHandle(UserButtonGesture gesture)
++{
++    static UserButtonRateLimiter limiter;
++    const UserButtonActionsConfig &cfg = userButtonActionsConfig();
++    // Same nag check as InputBroker::handleInputEvent
++    bool nagging =
++        externalNotificationModule && moduleConfig.external_notification.enabled && externalNotificationModule->nagging();
++
++    switch (userButtonActionsResolve(cfg, gesture, nagging, millis(), limiter)) {
++    case UBA_OUTCOME_STOCK:
++        return false;
++    case UBA_OUTCOME_ACK:
++        LOG_INFO("User button: acknowledge notification");
++        externalNotificationModule->stopNow();
++        if (cfg.ack_text)
++            sendTextBroadcast(cfg.ack_text);
++        break;
++    case UBA_OUTCOME_ALERT:
++        LOG_INFO("User button: send alert");
++        sendTextBroadcast(cfg.alert_text);
++        if (cfg.alert_with_position)
++            sendAdHocPosition();
++        break;
++    case UBA_OUTCOME_POSITION:
++        LOG_INFO("User button: send position");
++        sendAdHocPosition();
++        break;
++    case UBA_OUTCOME_RATE_LIMITED:
++        LOG_DEBUG("User button: alert ignored, sent less than %u s ago", (unsigned)cfg.alert_min_interval_secs);
++        break;
++    case UBA_OUTCOME_IGNORE:
++        break;
++    }
++    // Stock handling would have triggered this via InputBroker
++    powerFSM.trigger(EVENT_INPUT);
++    return true;
++}
++#endif
+diff --git a/src/input/UserButtonActions.h b/src/input/UserButtonActions.h
+new file mode 100644
+index 000000000..db9898a57
+--- /dev/null
++++ b/src/input/UserButtonActions.h
+@@ -0,0 +1,114 @@
++#pragma once
++
++#include <stdint.h>
++
++// Configurable actions for the user button, mainly for devices without a screen.
++// Compiled in only with MESHTASTIC_USER_BUTTON_ACTIONS; the decision logic below is
++// hardware-free so it can be unit tested.
++
++enum UserButtonAction : uint8_t {
++    BUTTON_ACTION_DEFAULT = 0,    // keep stock behavior for this gesture
++    BUTTON_ACTION_NONE,           // do nothing
++    BUTTON_ACTION_ADHOC_POSITION, // send position now
++    BUTTON_ACTION_SEND_ALERT,     // send alert text (+ position if configured)
++    BUTTON_ACTION_ACK_OR_ALERT,   // ack a running notification, otherwise send alert
++};
++
++enum UserButtonGesture : uint8_t { USER_BUTTON_SINGLE, USER_BUTTON_DOUBLE };
++
++// Fields mirror the proposed UserButtonConfig protobuf message.
++struct UserButtonActionsConfig {
++    bool enabled;
++    UserButtonAction single_press;
++    UserButtonAction double_press;
++    const char *alert_text;
++    const char *ack_text; // nullptr = no ack message
++    bool alert_with_position;
++    uint32_t alert_min_interval_secs;
++    uint32_t long_press_shutdown_ms; // 0 = stock value
++};
++
++#ifndef UBA_SINGLE_PRESS
++#define UBA_SINGLE_PRESS BUTTON_ACTION_DEFAULT
++#endif
++#ifndef UBA_DOUBLE_PRESS
++#define UBA_DOUBLE_PRESS BUTTON_ACTION_DEFAULT
++#endif
++#ifndef UBA_ALERT_TEXT
++#define UBA_ALERT_TEXT "\x07HELP"
++#endif
++#ifndef UBA_ACK_TEXT
++#define UBA_ACK_TEXT "\x07OK"
++#endif
++#ifndef UBA_ALERT_WITH_POSITION
++#define UBA_ALERT_WITH_POSITION 1
++#endif
++#ifndef UBA_ALERT_MIN_INTERVAL_SECS
++#define UBA_ALERT_MIN_INTERVAL_SECS 30
++#endif
++#ifndef UBA_LONG_PRESS_SHUTDOWN_MS
++#define UBA_LONG_PRESS_SHUTDOWN_MS 0
++#endif
++static_assert(UBA_LONG_PRESS_SHUTDOWN_MS <= UINT16_MAX, "UBA_LONG_PRESS_SHUTDOWN_MS must fit ButtonConfig::longLongPressTime");
++
++// Today filled from build flags; could be filled from moduleConfig instead.
++inline const UserButtonActionsConfig &userButtonActionsConfig()
++{
++    static const UserButtonActionsConfig config = {
++#if MESHTASTIC_USER_BUTTON_ACTIONS
++        true,
++#else
++        false,
++#endif
++        UBA_SINGLE_PRESS,
++        UBA_DOUBLE_PRESS,
++        UBA_ALERT_TEXT,
++        UBA_ACK_TEXT,
++        UBA_ALERT_WITH_POSITION != 0,
++        UBA_ALERT_MIN_INTERVAL_SECS,
++        UBA_LONG_PRESS_SHUTDOWN_MS,
++    };
++    return config;
++}
++
++enum UserButtonOutcome : uint8_t {
++    UBA_OUTCOME_STOCK,        // not handled, run stock code
++    UBA_OUTCOME_IGNORE,       // handled, do nothing
++    UBA_OUTCOME_POSITION,     // send ad-hoc position
++    UBA_OUTCOME_ALERT,        // send alert text
++    UBA_OUTCOME_ACK,          // stop the notification, send ack text
++    UBA_OUTCOME_RATE_LIMITED, // alert suppressed by alert_min_interval_secs
++};
++
++struct UserButtonRateLimiter {
++    bool sent = false;
++    uint32_t lastMs = 0;
++};
++
++inline UserButtonOutcome userButtonActionsResolve(const UserButtonActionsConfig &config, UserButtonGesture gesture, bool nagging,
++                                                  uint32_t nowMs, UserButtonRateLimiter &limiter)
++{
++    if (!config.enabled)
++        return UBA_OUTCOME_STOCK;
++    switch (gesture == USER_BUTTON_SINGLE ? config.single_press : config.double_press) {
++    case BUTTON_ACTION_NONE:
++        return UBA_OUTCOME_IGNORE;
++    case BUTTON_ACTION_ADHOC_POSITION:
++        return UBA_OUTCOME_POSITION;
++    case BUTTON_ACTION_ACK_OR_ALERT:
++        if (nagging)
++            return UBA_OUTCOME_ACK;
++        // fall through
++    case BUTTON_ACTION_SEND_ALERT:
++        if (limiter.sent && nowMs - limiter.lastMs < config.alert_min_interval_secs * 1000)
++            return UBA_OUTCOME_RATE_LIMITED;
++        limiter.sent = true;
++        limiter.lastMs = nowMs;
++        return UBA_OUTCOME_ALERT;
++    default:
++        return UBA_OUTCOME_STOCK;
++    }
++}
++
++// Runs the configured action. Returns true if the gesture was handled and stock handling must be skipped.
++bool userButtonActionsHandle(UserButtonGesture gesture);
+diff --git a/test/test_user_button_actions/test_main.cpp b/test/test_user_button_actions/test_main.cpp
+new file mode 100644
+index 000000000..3569eaac3
+--- /dev/null
++++ b/test/test_user_button_actions/test_main.cpp
+@@ -0,0 +1,130 @@
++#include "Arduino.h"
++#include "TestUtil.h"
++#include "input/UserButtonActions.h"
++#include <unity.h>
++
++static UserButtonActionsConfig cfg;
++static UserButtonRateLimiter limiter;
++
++void setUp(void)
++{
++    cfg = {};
++    cfg.enabled = true;
++    cfg.single_press = BUTTON_ACTION_ACK_OR_ALERT;
++    cfg.double_press = BUTTON_ACTION_DEFAULT;
++    cfg.alert_min_interval_secs = 30;
++    limiter = UserButtonRateLimiter();
++}
++
++void tearDown(void) {}
++
++static UserButtonOutcome resolve(UserButtonGesture gesture, bool nagging, uint32_t nowMs)
++{
++    return userButtonActionsResolve(cfg, gesture, nagging, nowMs, limiter);
++}
++
++static void test_build_flag_defaults_are_stock()
++{
++    const UserButtonActionsConfig &c = userButtonActionsConfig();
++    TEST_ASSERT_FALSE(c.enabled); // test env does not set MESHTASTIC_USER_BUTTON_ACTIONS
++    TEST_ASSERT_EQUAL(BUTTON_ACTION_DEFAULT, c.single_press);
++    TEST_ASSERT_EQUAL(BUTTON_ACTION_DEFAULT, c.double_press);
++    TEST_ASSERT_EQUAL_STRING("\x07HELP", c.alert_text);
++    TEST_ASSERT_EQUAL_STRING("\x07OK", c.ack_text);
++    TEST_ASSERT_TRUE(c.alert_with_position);
++    TEST_ASSERT_EQUAL_UINT32(30, c.alert_min_interval_secs);
++    TEST_ASSERT_EQUAL_UINT32(0, c.long_press_shutdown_ms);
++}
++
++static void test_disabled_keeps_stock()
++{
++    cfg.enabled = false;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_SINGLE, false, 1000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_SINGLE, true, 1000));
++}
++
++static void test_default_action_keeps_stock()
++{
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_STOCK, resolve(USER_BUTTON_DOUBLE, false, 1000));
++}
++
++static void test_none_swallows_gesture()
++{
++    cfg.double_press = BUTTON_ACTION_NONE;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_IGNORE, resolve(USER_BUTTON_DOUBLE, true, 1000));
++}
++
++static void test_adhoc_position()
++{
++    cfg.double_press = BUTTON_ACTION_ADHOC_POSITION;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_POSITION, resolve(USER_BUTTON_DOUBLE, false, 1000));
++}
++
++static void test_ack_or_alert_acks_while_nagging()
++{
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ACK, resolve(USER_BUTTON_SINGLE, true, 1000));
++    // acks are never rate-limited and do not consume the alert window
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ACK, resolve(USER_BUTTON_SINGLE, true, 1100));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, false, 1200));
++}
++
++static void test_ack_or_alert_alerts_when_idle()
++{
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, false, 1000));
++}
++
++static void test_send_alert_ignores_nag()
++{
++    cfg.single_press = BUTTON_ACTION_SEND_ALERT;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, true, 1000));
++}
++
++static void test_alert_rate_limited_within_interval()
++{
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, false, 1000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_RATE_LIMITED, resolve(USER_BUTTON_SINGLE, false, 1000 + 29999));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, false, 1000 + 30000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_RATE_LIMITED, resolve(USER_BUTTON_SINGLE, false, 1000 + 30001));
++}
++
++static void test_first_alert_allowed_right_after_boot()
++{
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, false, 0));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_RATE_LIMITED, resolve(USER_BUTTON_SINGLE, false, 10));
++}
++
++static void test_rate_limit_survives_millis_wraparound()
++{
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, false, UINT32_MAX - 1000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_RATE_LIMITED, resolve(USER_BUTTON_SINGLE, false, 1000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, false, 30000));
++}
++
++static void test_zero_interval_never_limits()
++{
++    cfg.alert_min_interval_secs = 0;
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, false, 1000));
++    TEST_ASSERT_EQUAL(UBA_OUTCOME_ALERT, resolve(USER_BUTTON_SINGLE, false, 1000));
++}
++
++void setup()
++{
++    initializeTestEnvironment();
++
++    UNITY_BEGIN();
++    RUN_TEST(test_build_flag_defaults_are_stock);
++    RUN_TEST(test_disabled_keeps_stock);
++    RUN_TEST(test_default_action_keeps_stock);
++    RUN_TEST(test_none_swallows_gesture);
++    RUN_TEST(test_adhoc_position);
++    RUN_TEST(test_ack_or_alert_acks_while_nagging);
++    RUN_TEST(test_ack_or_alert_alerts_when_idle);
++    RUN_TEST(test_send_alert_ignores_nag);
++    RUN_TEST(test_alert_rate_limited_within_interval);
++    RUN_TEST(test_first_alert_allowed_right_after_boot);
++    RUN_TEST(test_rate_limit_survives_millis_wraparound);
++    RUN_TEST(test_zero_interval_never_limits);
++    exit(UNITY_END());
++}
++
++void loop() {}
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,0 +1,68 @@
+From b336bac086476f8b8fb09623f7b9ed421154ce22 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Boris=20Sta=CC=88heli?= <ich@bstaehe.li>
+Date: Wed, 21 Oct 2026 14:17:19 +0200
+Subject: [PATCH 2/2] Hook user button actions into ButtonThread
+
+When built with MESHTASTIC_USER_BUTTON_ACTIONS, single and double presses
+of the user button are offered to userButtonActionsHandle() first; stock
+handling runs unchanged unless the configured action handles the gesture.
+
+The long-press shutdown hold time of the user button can be overridden
+with long_press_shutdown_ms (UBA_LONG_PRESS_SHUTDOWN_MS); 0 keeps the
+stock value.
+---
+ src/input/ButtonThread.cpp | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/src/input/ButtonThread.cpp b/src/input/ButtonThread.cpp
+index 3b0a46e88..2e156415f 100644
+--- a/src/input/ButtonThread.cpp
++++ b/src/input/ButtonThread.cpp
+@@ -17,6 +17,9 @@
+ #ifdef ARCH_PORTDUINO
+ #include "platform/portduino/PortduinoGlue.h"
+ #endif
++#if MESHTASTIC_USER_BUTTON_ACTIONS
++#include "input/UserButtonActions.h"
++#endif
+ 
+ using namespace concurrency;
+ 
+@@ -41,6 +44,10 @@ bool ButtonThread::initButton(const ButtonConfig &config)
+     _releaseHandler = config.onRelease;
+     _suppressLeadUp = config.suppressLeadUpSound;
+     _longLongPress = config.longLongPress;
++#if MESHTASTIC_USER_BUTTON_ACTIONS
++    if (_longLongPress == INPUT_BROKER_SHUTDOWN && userButtonActionsConfig().long_press_shutdown_ms)
++        _longLongPressTime = userButtonActionsConfig().long_press_shutdown_ms;
++#endif
+ 
+     userButton = OneButton(config.pinNumber, config.activeLow, config.activePullup);
+ 
+@@ -186,6 +193,10 @@ int32_t ButtonThread::runOnce()
+         evt.touchY = 0;
+         switch (btnEvent) {
+         case BUTTON_EVENT_PRESSED: {
++#if MESHTASTIC_USER_BUTTON_ACTIONS
++            if (strcmp(_originName, "UserButton") == 0 && userButtonActionsHandle(USER_BUTTON_SINGLE))
++                break;
++#endif
+             // Forward single press to InputBroker (but NOT as DOWN/SELECT, just forward a "button press" event)
+             evt.inputEvent = _singlePress;
+             // evt.kbchar = _singlePress; // todo: fix this. Some events are kb characters rather than event types
+@@ -227,6 +238,12 @@ int32_t ButtonThread::runOnce()
+ 
+         case BUTTON_EVENT_DOUBLE_PRESSED: { // not wired in if screen detected
+             LOG_INFO("Double press!");
++#if MESHTASTIC_USER_BUTTON_ACTIONS
++            if (strcmp(_originName, "UserButton") == 0 && userButtonActionsHandle(USER_BUTTON_DOUBLE)) {
++                waitingForLongPress = false;
++                break;
++            }
++#endif
+ 
+             // Reset combination tracking
+             waitingForLongPress = false;
+-- 
+2.54.0 (Apple Git-157)
+
