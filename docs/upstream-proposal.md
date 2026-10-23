@@ -59,7 +59,8 @@ Upstream declined earlier requests mainly over accidental sends on devices witho
   location. It follows the primary channel `position_precision` exactly like `PositionModule`: no link at
   precision 0 or without a fix since boot, otherwise the same truncated coordinates via
   `applyPositionPrecision()` and an accuracy of at least the precision radius. The link never reveals more
-  than the position packet sent alongside it.
+  than the position packet sent alongside it. After a lost GPS lock both use the last fix since boot with its
+  age; without any fix since boot the text says `no GPS fix`.
 
 ## Migration note
 

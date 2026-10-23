@@ -1,7 +1,7 @@
 From 31ad1fd275fb8443750f63f9dc998df0ff3887f9 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Boris=20Sta=CC=88heli?= <ich@bstaehe.li>
 Date: Wed, 21 Oct 2026 16:37:22 +0200
-Subject: [PATCH 09/10] User button actions: decide on the state at button-down
+Subject: [PATCH 09/11] User button actions: decide on the state at button-down
 
 - Snapshot the notification state at button-down. A bell message that
   arrives during the press or before the click is reported no longer

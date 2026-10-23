@@ -16,6 +16,12 @@ and the project uses [Semantic Versioning](https://semver.org/).
   old fix, e.g. `\x07HELP https://osm.org/go/0C0WCb6VB--?m ±25m 4min old`. It honors the primary
   channel's `position_precision` (no link at 0, truncated position otherwise). Fork updated to `031139d`.
 - Node-RED filter classifies texts by their first word and extracts the link.
+- After a lost GPS lock, HELP/SOS use the last fix since boot for the link and the position packet, with
+  its age (`±25m 7min old`); without any fix since boot the text reads `HELP no GPS fix`. Fork updated to
+  `2375c33` (#2).
+
+### Fixed (map link)
+- Alert texts are limited to 200 bytes; a 233-byte text was dropped by the router as too large.
 
 ### Changed
 - Fork updated to `31ad1fd`: click or short hold sends HELP, double or rapid press sends SOS (separate 30 s

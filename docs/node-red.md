@@ -4,7 +4,8 @@ A base node bridges the mesh to MQTT. With JSON output enabled on the base node,
 messages arrive as JSON with `type: "text"` and `payload.text`. The alert and acknowledgement
 texts start with the bell character `\u0007`: `\u0007HELP`, `\u0007SOS` and `\u0007OK`. HELP and SOS
 are usually followed by a map link, accuracy and age, e.g.
-`\u0007HELP https://osm.org/go/0C0WCb6VB--?m ±25m 4min old` (see [behavior](behavior.md)).
+`\u0007HELP https://osm.org/go/0C0WCb6VB--?m ±25m 4min old`, or `\u0007HELP no GPS fix` without any
+fix since boot (see [behavior](behavior.md)).
 
 Flow: `mqtt in` (topic `msh/<region>/2/json/<channel>/#`) -> `json` -> function node below -> notification node of your choice.
 
