@@ -1,7 +1,7 @@
 From b336bac086476f8b8fb09623f7b9ed421154ce22 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Boris=20Sta=CC=88heli?= <ich@bstaehe.li>
 Date: Wed, 21 Oct 2026 14:17:19 +0200
-Subject: [PATCH 02/11] Hook user button actions into ButtonThread
+Subject: [PATCH 02/12] Hook user button actions into ButtonThread
 
 When built with MESHTASTIC_USER_BUTTON_ACTIONS, single and double presses
 of the user button are offered to userButtonActionsHandle() first; stock

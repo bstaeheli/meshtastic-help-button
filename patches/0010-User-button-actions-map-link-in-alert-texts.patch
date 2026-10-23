@@ -1,7 +1,7 @@
 From 031139d680ed7c7afb33bcc2797733b93383fa1b Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Boris=20Sta=CC=88heli?= <ich@bstaehe.li>
 Date: Fri, 23 Oct 2026 17:58:57 +0200
-Subject: [PATCH 10/11] User button actions: map link in alert texts
+Subject: [PATCH 10/12] User button actions: map link in alert texts
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

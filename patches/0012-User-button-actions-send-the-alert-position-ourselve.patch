@@ -1,0 +1,205 @@
+From af64b92b2c7060b1bb2620738ab79643e7e9bf34 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Boris=20Sta=CC=88heli?= <ich@bstaehe.li>
+Date: Fri, 23 Oct 2026 20:39:04 +0200
+Subject: [PATCH 12/12] User button actions: send the alert position ourselves,
+ with the fix time
+
+- The position packet of an alert is built from the last fix like
+  PositionModule::allocPositionPacket does (position_flags subset,
+  channel precision), but a fix older than 120 s keeps its own time and
+  timestamp instead of going out looking fresh.
+- Send it like the alert text (HIGH priority, channel 0) instead of via
+  PositionModule::sendOurPosition: its next periodic send cancelled the
+  alert position through prevPacketId, and after a lost lock that send
+  allocates nothing. Stock PositionModule stays unchanged.
+---
+ src/input/UserButtonActions.cpp             | 28 +++++------
+ src/input/UserButtonActions.h               | 52 +++++++++++++++++++--
+ test/test_user_button_actions/test_main.cpp | 45 ++++++++++++++++++
+ 3 files changed, 108 insertions(+), 17 deletions(-)
+
+diff --git a/src/input/UserButtonActions.cpp b/src/input/UserButtonActions.cpp
+index 55461fd0e..32f6c6a70 100644
+--- a/src/input/UserButtonActions.cpp
++++ b/src/input/UserButtonActions.cpp
+@@ -11,9 +11,6 @@
+ #include "buzz/buzz.h"
+ #include "gps/RTC.h"
+ #include "modules/ExternalNotificationModule.h"
+-#if !MESHTASTIC_EXCLUDE_GPS
+-#include "modules/PositionModule.h"
+-#endif
+ 
+ // Same packet construction as CannedMessageModule::sendText, but broadcast on the primary channel without ack
+ static void sendTextBroadcast(const char *text)
+@@ -50,20 +47,23 @@ static void rememberFix()
+     userButtonActionsRememberFix(lastFix, current, config.position.fixed_position || nodeDB->hasLocalPositionSinceBoot());
+ }
+ 
+-// Position packet with the last fix, also after the GPS lost lock (stock would send none). PositionModule builds it
+-// from localPosition with the channel precision, so swap the last fix in for this one packet.
++// Position packet with the last fix, also after the GPS lost lock (stock would send none). Sent like the alert text
++// (HIGH priority) and not via PositionModule, whose next periodic send would cancel it.
+ static void sendLastFix()
+ {
+-#if !MESHTASTIC_EXCLUDE_GPS
+-    if (!positionModule || (!lastFix.latitude_i && !lastFix.longitude_i))
++    meshtastic_Position pos;
++    if (!userButtonActionsAlertPosition(pos, lastFix, getPositionPrecisionForChannel(0), config.position.position_flags,
++                                        getValidTime(RTCQualityDevice)))
+         return;
+-    meshtastic_Position current = localPosition;
+-    localPosition = lastFix;
+-    service->refreshLocalMeshNode();
+-    positionModule->sendOurPosition(NODENUM_BROADCAST, false, 0);
+-    current.seq_number = localPosition.seq_number;
+-    localPosition = current;
+-#endif
++    meshtastic_MeshPacket *p = router->allocForSending();
++    p->to = NODENUM_BROADCAST;
++    p->channel = 0;
++    p->want_ack = false;
++    p->priority = meshtastic_MeshPacket_Priority_HIGH;
++    p->decoded.portnum = meshtastic_PortNum_POSITION_APP;
++    p->decoded.payload.size =
++        pb_encode_to_bytes(p->decoded.payload.bytes, sizeof(p->decoded.payload.bytes), &meshtastic_Position_msg, &pos);
++    service->sendToMesh(p, RX_SRC_LOCAL, true);
+ }
+ 
+ // Button feedback as stock would give it for this event (honors buzzer_mode)
+diff --git a/src/input/UserButtonActions.h b/src/input/UserButtonActions.h
+index 9dff47d51..1d5c7f01a 100644
+--- a/src/input/UserButtonActions.h
++++ b/src/input/UserButtonActions.h
+@@ -280,6 +280,53 @@ inline void userButtonActionsRememberFix(meshtastic_Position &lastFix, const mes
+         lastFix = current;
+ }
+ 
++// A fix older than this is reported with its age and sent with its own time
++static const uint32_t UBA_OLD_FIX_SECS = 120;
++
++// Fix age in seconds, 0 = fresh or unknown (no valid time)
++inline uint32_t userButtonActionsFixAge(const meshtastic_Position &fix, uint32_t nowSecs)
++{
++    const uint32_t fixSecs = fix.timestamp ? fix.timestamp : fix.time;
++    return nowSecs && fixSecs && nowSecs > fixSecs ? nowSecs - fixSecs : 0;
++}
++
++// Position packet payload for an alert, as PositionModule::allocPositionPacket would build it (position_flags subset,
++// channel precision), but an old fix keeps its own time instead of looking fresh. Returns false if nothing may be sent.
++inline bool userButtonActionsAlertPosition(meshtastic_Position &out, const meshtastic_Position &fix, uint32_t precision,
++                                           uint32_t posFlags, uint32_t nowSecs)
++{
++    out = meshtastic_Position_init_default;
++    if (!precision || (!fix.latitude_i && !fix.longitude_i))
++        return false;
++    out.latitude_i = fix.latitude_i;
++    out.longitude_i = fix.longitude_i;
++    out.has_latitude_i = out.has_longitude_i = true;
++    out.location_source = fix.location_source;
++    out.timestamp = fix.timestamp ? fix.timestamp : fix.time;
++    out.time = userButtonActionsFixAge(fix, nowSecs) > UBA_OLD_FIX_SECS ? out.timestamp : nowSecs;
++    if (posFlags & meshtastic_Config_PositionConfig_PositionFlags_ALTITUDE) {
++        if (posFlags & meshtastic_Config_PositionConfig_PositionFlags_ALTITUDE_MSL) {
++            out.altitude = fix.altitude;
++            out.has_altitude = true;
++        } else {
++            out.altitude_hae = fix.altitude_hae;
++            out.has_altitude_hae = true;
++        }
++    }
++    if (posFlags & meshtastic_Config_PositionConfig_PositionFlags_DOP) {
++        if (posFlags & meshtastic_Config_PositionConfig_PositionFlags_HVDOP) {
++            out.HDOP = fix.HDOP;
++            out.VDOP = fix.VDOP;
++        } else {
++            out.PDOP = fix.PDOP;
++        }
++    }
++    if (posFlags & meshtastic_Config_PositionConfig_PositionFlags_SATINVIEW)
++        out.sats_in_view = fix.sats_in_view;
++    applyPositionPrecision(out, precision);
++    return true;
++}
++
+ // Alert text plus a map link to the position as the position packet would reveal it, e.g.
+ // "\aHELP https://osm.org/go/0C0WCb6VB--?m ±25m 4min old", or "\aHELP no GPS fix" without a position.
+ // precision: channel position_precision, 0 = plain text. nowSecs: valid time, 0 = unknown.
+@@ -317,9 +364,8 @@ inline size_t userButtonActionsAlertText(char *buf, size_t size, const char *ale
+     int n = snprintf(link, sizeof(link), " https://osm.org/go/%s?m", code);
+     if (accuracyM)
+         n += snprintf(link + n, sizeof(link) - n, " \xC2\xB1%um", (unsigned)accuracyM);
+-    const uint32_t fixSecs = pos.timestamp ? pos.timestamp : pos.time;
+-    const uint32_t ageSecs = nowSecs && fixSecs && nowSecs > fixSecs ? nowSecs - fixSecs : 0;
+-    if (ageSecs > 120) {
++    const uint32_t ageSecs = userButtonActionsFixAge(pos, nowSecs);
++    if (ageSecs > UBA_OLD_FIX_SECS) {
+         const uint32_t mins = ageSecs / 60;
+         if (mins < 60)
+             snprintf(link + n, sizeof(link) - n, " %umin old", (unsigned)mins);
+diff --git a/test/test_user_button_actions/test_main.cpp b/test/test_user_button_actions/test_main.cpp
+index 1efb41a15..83d74638a 100644
+--- a/test/test_user_button_actions/test_main.cpp
++++ b/test/test_user_button_actions/test_main.cpp
+@@ -550,6 +550,48 @@ static void test_alert_link_dropped_when_too_long()
+     TEST_ASSERT_EQUAL_STRING("\aHELP", small);
+ }
+ 
++static void test_alert_position_of_fresh_fix()
++{
++    meshtastic_Position out;
++    meshtastic_Position f = fix();
++    f.altitude = 420;
++    TEST_ASSERT_TRUE(userButtonActionsAlertPosition(out, f, 32, 0, 1000000 + 60));
++    TEST_ASSERT_EQUAL(473769000, out.latitude_i);
++    TEST_ASSERT_EQUAL(85417000, out.longitude_i);
++    TEST_ASSERT_TRUE(out.has_latitude_i && out.has_longitude_i);
++    TEST_ASSERT_EQUAL(1000000 + 60, out.time); // fresh: sent as now, like PositionModule
++    TEST_ASSERT_EQUAL(1000000, out.timestamp);
++    TEST_ASSERT_EQUAL(32, out.precision_bits);
++    TEST_ASSERT_FALSE(out.has_altitude); // only with position_flags
++    TEST_ASSERT_TRUE(userButtonActionsAlertPosition(out, f, 32,
++                                                    meshtastic_Config_PositionConfig_PositionFlags_ALTITUDE |
++                                                        meshtastic_Config_PositionConfig_PositionFlags_ALTITUDE_MSL,
++                                                    1000000));
++    TEST_ASSERT_TRUE(out.has_altitude);
++    TEST_ASSERT_EQUAL(420, out.altitude);
++}
++
++static void test_alert_position_of_old_fix_keeps_fix_time()
++{
++    meshtastic_Position out;
++    TEST_ASSERT_TRUE(userButtonActionsAlertPosition(out, fix(), 32, 0, 1000000 + 30 * 60));
++    TEST_ASSERT_EQUAL(1000000, out.time);
++    TEST_ASSERT_EQUAL(1000000, out.timestamp);
++}
++
++static void test_alert_position_respects_channel_precision()
++{
++    meshtastic_Position out;
++    meshtastic_Position expected = fix();
++    applyPositionPrecision(expected, 16);
++    TEST_ASSERT_TRUE(userButtonActionsAlertPosition(out, fix(), 16, 0, 1000000));
++    TEST_ASSERT_EQUAL(expected.latitude_i, out.latitude_i);
++    TEST_ASSERT_EQUAL(expected.longitude_i, out.longitude_i);
++    TEST_ASSERT_EQUAL(16, out.precision_bits);
++    TEST_ASSERT_FALSE(userButtonActionsAlertPosition(out, fix(), 0, 0, 1000000));
++    TEST_ASSERT_FALSE(userButtonActionsAlertPosition(out, meshtastic_Position_init_default, 32, 0, 1000000)); // no fix
++}
++
+ void setup()
+ {
+     initializeTestEnvironment();
+@@ -610,6 +652,9 @@ void setup()
+     RUN_TEST(test_last_fix_forgotten_without_fix_since_boot);
+     RUN_TEST(test_alert_link_respects_channel_precision);
+     RUN_TEST(test_alert_link_dropped_when_too_long);
++    RUN_TEST(test_alert_position_of_fresh_fix);
++    RUN_TEST(test_alert_position_of_old_fix_keeps_fix_time);
++    RUN_TEST(test_alert_position_respects_channel_precision);
+     exit(UNITY_END());
+ }
+ 
+-- 
+2.54.0 (Apple Git-157)
+

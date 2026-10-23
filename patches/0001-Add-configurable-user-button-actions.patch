@@ -1,7 +1,7 @@
 From d89648c49aee6c6067cf5e051be8f62af747591d Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Boris=20Sta=CC=88heli?= <ich@bstaehe.li>
 Date: Wed, 21 Oct 2026 14:03:10 +0200
-Subject: [PATCH 01/11] Add configurable user button actions
+Subject: [PATCH 01/12] Add configurable user button actions
 
 Add UserButtonActions, an opt-in mapping from user button gestures to
 actions for devices without a screen: send an alert text (optionally

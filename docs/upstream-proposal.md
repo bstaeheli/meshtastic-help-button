@@ -75,7 +75,7 @@ The build-flag config maps 1:1 to the protobuf fields (`UBA_SINGLE_PRESS` -> `si
 
 - Gesture mapping lives in `src/input/InputBroker.cpp` (`userConfigNoScreen`); `ButtonThread` emits `INPUT_BROKER_*` events.
 - Stock nag stop is in `InputBroker::handleInputEvent` via `externalNotificationModule->nagging()` / `stopNow()`.
-- Ad-hoc position: `service->refreshLocalMeshNode()` then `service->trySendPosition(NODENUM_BROADCAST, true)`, as `SystemCommandsModule` does for `INPUT_BROKER_SEND_PING`.
+- Ad-hoc position: `service->refreshLocalMeshNode()` then `service->trySendPosition(NODENUM_BROADCAST, true)`, as `SystemCommandsModule` does for `INPUT_BROKER_SEND_PING`. The alert position instead is built by `userButtonActionsAlertPosition()` from the last fix (same fields and `applyPositionPrecision()` as `allocPositionPacket`, fix time kept for an old fix) and sent with `HIGH` priority outside `PositionModule`, so its `prevPacketId` cancel cannot drop it.
 - Map link: `osmShortLink()` ports `lib/short_link.rb` of openstreetmap-website (tested against its output); `userButtonActionsAlertText()` adds accuracy (HDOP/PDOP), zoom and fix age, and drops the link if the text would exceed `DATA_PAYLOAD_LEN`.
 - Text send: `router->allocForSending()`, channel 0, `HIGH`, `want_ack = false`, `sendToMesh(p, RX_SRC_LOCAL, true)`.
 - Pure decision logic: `UserButtonGesture {USER_BUTTON_SINGLE, USER_BUTTON_DOUBLE}`, `UserButtonOutcome` (`UBA_OUTCOME_*`), `UserButtonRateLimiter`, `userButtonActionsResolve()`; unit-tested in `test_user_button_actions`.

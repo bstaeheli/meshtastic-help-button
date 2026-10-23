@@ -22,6 +22,8 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed (map link)
 - Alert texts are limited to 200 bytes; a 233-byte text was dropped by the router as too large.
+- The alert position packet keeps the time of an old fix instead of looking fresh, is sent with HIGH
+  priority, and can no longer be cancelled by the next periodic position send. Fork updated to `af64b92`.
 
 ### Changed
 - Fork updated to `31ad1fd`: click or short hold sends HELP, double or rapid press sends SOS (separate 30 s

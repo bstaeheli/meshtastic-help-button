@@ -35,6 +35,9 @@ the stock behavior.
 - After the GPS lost lock (e.g. indoors) the link and the position packet use the last fix since boot,
   with its age (`±25m 7min old`). Without any fix since boot the text reads `\x07HELP no GPS fix` and no
   position packet is sent. Positions from a previous boot are never used.
+- The alert position packet is sent like the text (channel 0, priority `HIGH`) with the channel
+  precision and the `position_flags` fields; a fix older than 120 s keeps its own time, so it does not
+  look fresh. Periodic position sends cannot cancel it.
 - The link never reveals more than the position packet: no link, no position packet and no note if the
   primary channel's `position_precision` is 0; with reduced precision the link points to the same
   truncated position and the `±` is at least the precision radius (e.g. 365 m at 16 bits).

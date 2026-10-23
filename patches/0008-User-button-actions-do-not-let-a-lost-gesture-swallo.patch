@@ -1,7 +1,7 @@
 From a0b46e2358f58094c7ed22a0102e48f2699625b3 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Boris=20Sta=CC=88heli?= <ich@bstaehe.li>
 Date: Wed, 21 Oct 2026 16:18:12 +0200
-Subject: [PATCH 08/11] User button actions: do not let a lost gesture swallow
+Subject: [PATCH 08/12] User button actions: do not let a lost gesture swallow
  the next press
 
 If a press that stopped a melody never gets a gesture reported (e.g. a
