@@ -2,7 +2,9 @@
 
 A base node bridges the mesh to MQTT. With JSON output enabled on the base node, text
 messages arrive as JSON with `type: "text"` and `payload.text`. The alert and acknowledgement
-texts start with the bell character `\u0007`: `\u0007HELP`, `\u0007SOS` and `\u0007OK`.
+texts start with the bell character `\u0007`: `\u0007HELP`, `\u0007SOS` and `\u0007OK`. HELP and SOS
+are usually followed by a map link, accuracy and age, e.g.
+`\u0007HELP https://osm.org/go/0C0WCb6VB--?m ±25m 4min old` (see [behavior](behavior.md)).
 
 Flow: `mqtt in` (topic `msh/<region>/2/json/<channel>/#`) -> `json` -> function node below -> notification node of your choice.
 
@@ -13,9 +15,11 @@ if (msg.payload.type !== "text" || typeof text !== "string" || text[0] !== "\u00
     return null;
 }
 const body = text.slice(1);
-msg.kind = body === "OK" ? "ack" : body === "SOS" ? "sos" : "alert"; // HELP -> alert
+const word = body.split(" ")[0]; // HELP, SOS or OK; a map link may follow
+msg.kind = word === "OK" ? "ack" : word === "SOS" ? "sos" : "alert"; // HELP -> alert
+const link = (body.match(/https:\/\/osm\.org\/go\/\S+/) || [])[0]; // undefined without a link
 msg.topic = `${msg.kind}: ${body}`;
-msg.payload = { from: msg.payload.from, sender: msg.payload.sender, text: body, kind: msg.kind };
+msg.payload = { from: msg.payload.from, sender: msg.payload.sender, text: body, kind: msg.kind, link };
 return msg;
 ```
 

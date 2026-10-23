@@ -1,8 +1,8 @@
 From c42bf2debd7add325fc66099a02edd15c8020b3a Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Boris=20Sta=CC=88heli?= <ich@bstaehe.li>
 Date: Wed, 21 Oct 2026 16:00:32 +0200
-Subject: [PATCH 7/9] User button actions: melodies take priority, count-up to
- shutdown
+Subject: [PATCH 07/10] User button actions: melodies take priority, count-up
+ to shutdown
 
 - A press that starts while a melody plays (external notification nag
   or the hint tune) only stops it, right at button-down: the nag is

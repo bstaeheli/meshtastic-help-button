@@ -27,6 +27,15 @@ the stock behavior.
 - Texts are broadcast on channel index 0, port `TEXT_MESSAGE_APP`, priority `HIGH`, `want_ack = false`, and delivered to a connected phone as well.
 - The bell character (`0x07`) is part of all texts so phones and buzzers alert.
 - Texts: the preset sends `\x07HELP` / `\x07SOS` / `\x07OK`.
+- HELP and SOS carry a map link after the text, e.g. `\x07HELP https://osm.org/go/0C0WCb6VB--?m ±25m`,
+  and ` 4min old` (or `2h old`, `3d old`) when the last fix is older than 120 s. The link is an
+  OpenStreetMap shortlink computed on the tag (no network); the separate position packet is still sent.
+  Accuracy is about 5 m per HDOP (PDOP as fallback), rounded to 5 m, and left out if neither is known;
+  the map zoom (12 to 18) follows it.
+- The link never reveals more than the position packet: no link if the primary channel's
+  `position_precision` is 0 or there was no fix since boot; with reduced precision the link points to
+  the same truncated position and the `±` is at least the precision radius (e.g. 365 m at 16 bits).
+- The link is left out if the text would exceed the packet payload; `\x07OK` never has a link.
 
 ## Known limitations
 

@@ -1,0 +1,308 @@
+From 031139d680ed7c7afb33bcc2797733b93383fa1b Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Boris=20Sta=CC=88heli?= <ich@bstaehe.li>
+Date: Fri, 23 Oct 2026 17:58:57 +0200
+Subject: [PATCH 10/10] User button actions: map link in alert texts
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- With alert_with_position, HELP/SOS texts carry an OpenStreetMap
+  shortlink computed on the device, e.g.
+  "\aHELP https://osm.org/go/0C0WCb6VB--?m ±25m 4min old".
+- The link follows the primary channel position_precision like the
+  position packet: no link at precision 0 or without a fix since boot,
+  truncated coordinates and at least the precision radius otherwise.
+- Accuracy from HDOP (PDOP as fallback), zoom from accuracy, age only
+  for fixes older than 120 s. The link is dropped if the text would not
+  fit a packet; the alert text itself is never cut.
+---
+ src/input/UserButtonActions.cpp             |  12 +-
+ src/input/UserButtonActions.h               |  76 +++++++++++
+ test/test_user_button_actions/test_main.cpp | 134 ++++++++++++++++++++
+ 3 files changed, 220 insertions(+), 2 deletions(-)
+
+diff --git a/src/input/UserButtonActions.cpp b/src/input/UserButtonActions.cpp
+index 1cc6c6e34..355bfa5c0 100644
+--- a/src/input/UserButtonActions.cpp
++++ b/src/input/UserButtonActions.cpp
+@@ -8,6 +8,7 @@
+ #include "UserButtonActions.h"
+ #include "buzz/BuzzerFeedbackThread.h"
+ #include "buzz/buzz.h"
++#include "gps/RTC.h"
+ #include "modules/ExternalNotificationModule.h"
+ 
+ // Same packet construction as CannedMessageModule::sendText, but broadcast on the primary channel without ack
+@@ -96,14 +97,21 @@ bool userButtonActionsHandle(UserButtonGesture gesture, uint32_t holdMs, uint32_
+         playFeedback(INPUT_BROKER_USER_PRESS);
+         break;
+     case UBA_OUTCOME_ALERT:
+-    case UBA_OUTCOME_ALERT2:
++    case UBA_OUTCOME_ALERT2: {
+         LOG_INFO("User button: send alert level %d", outcome == UBA_OUTCOME_ALERT2 ? 2 : 1);
+-        sendTextBroadcast(outcome == UBA_OUTCOME_ALERT2 ? cfg.alert2_text : cfg.alert_text);
++        // Map link only to what the position packet on the primary channel reveals
++        char text[meshtastic_Constants_DATA_PAYLOAD_LEN + 1];
++        const uint32_t precision =
++            cfg.alert_with_position && nodeDB->hasLocalPositionSinceBoot() ? getPositionPrecisionForChannel(0) : 0;
++        userButtonActionsAlertText(text, sizeof(text), outcome == UBA_OUTCOME_ALERT2 ? cfg.alert2_text : cfg.alert_text,
++                                   localPosition, precision, getValidTime(RTCQualityDevice));
++        sendTextBroadcast(text);
+         state.limiters[outcome == UBA_OUTCOME_ALERT2].alertSent(state.nowMs);
+         if (cfg.alert_with_position)
+             sendAdHocPosition(false);
+         playFeedback(INPUT_BROKER_USER_PRESS);
+         break;
++    }
+     case UBA_OUTCOME_POSITION:
+         LOG_INFO("User button: send position");
+         sendAdHocPosition(true);
+diff --git a/src/input/UserButtonActions.h b/src/input/UserButtonActions.h
+index 3607648e4..77456f4da 100644
+--- a/src/input/UserButtonActions.h
++++ b/src/input/UserButtonActions.h
+@@ -1,6 +1,9 @@
+ #pragma once
+ 
++#include "PositionPrecision.h"
+ #include <stdint.h>
++#include <stdio.h>
++#include <string.h>
+ 
+ // Configurable actions for the user button, mainly for devices without a screen.
+ // Compiled in only with MESHTASTIC_USER_BUTTON_ACTIONS; the decision logic below is
+@@ -236,6 +239,79 @@ inline int userButtonActionsLeadUpNote(uint32_t holdMs, uint32_t holdAlertMaxMs,
+     return (holdMs - startMs) * (UBA_LEADUP_NOTES - 1) / (lastNoteMs - startMs);
+ }
+ 
++// OSM shortlink code (openstreetmap-website lib/short_link.rb); code needs UBA_OSM_CODE_SIZE bytes for zoom <= 18
++static const size_t UBA_OSM_CODE_SIZE = 12;
++inline void osmShortLink(char *code, int32_t lat_i, int32_t lon_i, uint8_t zoom)
++{
++    static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_~";
++    const uint32_t x = (uint64_t)((int64_t)lon_i + 1800000000) * (1ull << 32) / 3600000000u;
++    const uint32_t y = (uint64_t)((int64_t)lat_i + 900000000) * (1ull << 32) / 1800000000u;
++    uint64_t bits = 0;
++    for (int i = 31; i >= 0; i--)
++        bits = (bits << 2) | ((x >> i) & 1) << 1 | ((y >> i) & 1);
++    int n = 0;
++    for (int i = 0; i < (zoom + 8 + 2) / 3; i++)
++        code[n++] = alphabet[(bits >> (58 - 6 * i)) & 0x3f];
++    for (int i = 0; i < (zoom + 8) % 3; i++)
++        code[n++] = '-';
++    code[n] = 0;
++}
++
++// Zoom at which the map shows a few times the accuracy radius (meters, 0 = unknown)
++inline uint8_t userButtonActionsMapZoom(uint32_t accuracyM)
++{
++    if (!accuracyM)
++        return 16;
++    uint8_t zoom = 18; // a phone screen spans roughly 2^(26 - zoom) m
++    while (zoom > 12 && (1u << (23 - zoom)) < accuracyM)
++        zoom--;
++    return zoom;
++}
++
++// Alert text plus a map link to the position as the position packet would reveal it, e.g.
++// "\aHELP https://osm.org/go/0C0WCb6VB--?m ±25m 4min old". precision: channel position_precision, 0 = no link.
++// nowSecs: valid time, 0 = unknown. The link is left out if it does not fit. Returns the text length.
++inline size_t userButtonActionsAlertText(char *buf, size_t size, const char *alert, meshtastic_Position pos, uint32_t precision,
++                                         uint32_t nowSecs)
++{
++    int len = snprintf(buf, size, "%s", alert);
++    if (len < 0 || (size_t)len >= size || !precision || (!pos.latitude_i && !pos.longitude_i))
++        return len < 0 ? 0 : strlen(buf);
++
++    // Accuracy ~ 5 m per DOP (1/100 units) rounded to 5 m, at least the radius of the precision cell
++    const uint32_t dop = pos.HDOP ? pos.HDOP : pos.PDOP;
++    uint32_t accuracyM = dop ? (dop + 50) / 100 * 5 : 0;
++    if (dop && !accuracyM)
++        accuracyM = 5;
++    applyPositionPrecision(pos, precision);
++    if (pos.precision_bits < 32) {
++        const uint32_t radiusM = (uint32_t)(((1ull << (31 - pos.precision_bits)) * 11132 + 999999) / 1000000);
++        if (accuracyM < radiusM)
++            accuracyM = (radiusM + 4) / 5 * 5;
++    }
++
++    char code[UBA_OSM_CODE_SIZE];
++    osmShortLink(code, pos.latitude_i, pos.longitude_i, userButtonActionsMapZoom(accuracyM));
++    char link[64];
++    int n = snprintf(link, sizeof(link), " https://osm.org/go/%s?m", code);
++    if (accuracyM)
++        n += snprintf(link + n, sizeof(link) - n, " \xC2\xB1%um", (unsigned)accuracyM);
++    const uint32_t fixSecs = pos.timestamp ? pos.timestamp : pos.time;
++    const uint32_t ageSecs = nowSecs && fixSecs && nowSecs > fixSecs ? nowSecs - fixSecs : 0;
++    if (ageSecs > 120) {
++        const uint32_t mins = ageSecs / 60;
++        if (mins < 60)
++            snprintf(link + n, sizeof(link) - n, " %umin old", (unsigned)mins);
++        else if (mins < 48 * 60)
++            snprintf(link + n, sizeof(link) - n, " %uh old", (unsigned)(mins / 60));
++        else
++            snprintf(link + n, sizeof(link) - n, " %ud old", (unsigned)(mins / 1440));
++    }
++    if ((size_t)len + strlen(link) < size)
++        strcpy(buf + len, link);
++    return strlen(buf);
++}
++
+ // Runs the configured action. Returns true if the gesture was handled and stock handling must be skipped.
+ bool userButtonActionsHandle(UserButtonGesture gesture, uint32_t holdMs = 0, uint32_t shutdownMs = 0);
+ 
+diff --git a/test/test_user_button_actions/test_main.cpp b/test/test_user_button_actions/test_main.cpp
+index 3d0ef88b2..987682516 100644
+--- a/test/test_user_button_actions/test_main.cpp
++++ b/test/test_user_button_actions/test_main.cpp
+@@ -381,6 +381,132 @@ static void test_lead_up_with_start_after_last_note()
+     TEST_ASSERT_EQUAL(7, userButtonActionsLeadUpNote(2900, 3000, 3100));
+ }
+ 
++static void test_osm_short_link_matches_upstream()
++{
++    // Vectors from openstreetmap-website lib/short_link.rb
++    struct {
++        int32_t lat, lon;
++        uint8_t zoom;
++        const char *code;
++    } vectors[] = {
++        {473769000, 85417000, 18, "0C0WCb6VB--"},  {473769000, 85417000, 12, "0C0WCb6--"},
++        {-338688000, 1512093000, 16, "uN~ROOdV"},  {407128000, -740060000, 17, "Zct2v4Otf-"},
++        {-548019000, -683030000, 14, "Ja4o96dS-"}, {0, 0, 15, "wAAAAAAA--"},
++        {515074000, -1278000, 13, "euu4gZq"},
++    };
++    for (auto &v : vectors) {
++        char code[UBA_OSM_CODE_SIZE];
++        osmShortLink(code, v.lat, v.lon, v.zoom);
++        TEST_ASSERT_EQUAL_STRING(v.code, code);
++    }
++}
++
++static void test_map_zoom_from_accuracy()
++{
++    TEST_ASSERT_EQUAL(18, userButtonActionsMapZoom(5));
++    TEST_ASSERT_EQUAL(18, userButtonActionsMapZoom(30));
++    TEST_ASSERT_EQUAL(17, userButtonActionsMapZoom(50));
++    TEST_ASSERT_EQUAL(14, userButtonActionsMapZoom(365));
++    TEST_ASSERT_EQUAL(12, userButtonActionsMapZoom(2920));
++    TEST_ASSERT_EQUAL(12, userButtonActionsMapZoom(100000));
++    TEST_ASSERT_EQUAL(16, userButtonActionsMapZoom(0)); // unknown accuracy
++}
++
++static meshtastic_Position fix(uint32_t hdop = 500, uint32_t timestamp = 1000000)
++{
++    meshtastic_Position p = meshtastic_Position_init_default;
++    p.latitude_i = 473769000;
++    p.longitude_i = 85417000;
++    p.HDOP = hdop;
++    p.timestamp = timestamp;
++    return p;
++}
++
++static const char *alertText(const meshtastic_Position &pos, uint32_t precision, uint32_t nowSecs = 1000000,
++                             const char *alert = "\aHELP")
++{
++    static char buf[meshtastic_Constants_DATA_PAYLOAD_LEN + 1];
++    userButtonActionsAlertText(buf, sizeof(buf), alert, pos, precision, nowSecs);
++    return buf;
++}
++
++static void test_alert_with_map_link()
++{
++    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WCb6VB--?m \xC2\xB1"
++                             "25m",
++                             alertText(fix(), 32));
++}
++
++static void test_alert_accuracy_from_hdop_or_pdop()
++{
++    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WCb6VB--?m \xC2\xB1"
++                             "5m",
++                             alertText(fix(80), 32)); // 4 m, at least 5
++    meshtastic_Position p = fix(0);
++    p.PDOP = 1200;
++    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WCb6VB-?m \xC2\xB1"
++                             "60m",
++                             alertText(p, 32));
++    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WCb6V?m", alertText(fix(0), 32)); // unknown: no accuracy
++}
++
++static void test_alert_link_shows_age_of_old_fix()
++{
++    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WCb6VB--?m \xC2\xB1"
++                             "25m",
++                             alertText(fix(), 32, 1000000 + 120));
++    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WCb6VB--?m \xC2\xB1"
++                             "25m 4min old",
++                             alertText(fix(), 32, 1000000 + 270));
++    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WCb6VB--?m \xC2\xB1"
++                             "25m 2h old",
++                             alertText(fix(), 32, 1000000 + 2 * 3600 + 5));
++    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WCb6VB--?m \xC2\xB1"
++                             "25m 3d old",
++                             alertText(fix(), 32, 1000000 + 3 * 86400));
++    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WCb6VB--?m \xC2\xB1"
++                             "25m",
++                             alertText(fix(), 32, 0)); // no valid time
++    meshtastic_Position p = fix(500, 0);
++    p.time = 1000000 - 600; // no fix timestamp: use the position time
++    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WCb6VB--?m \xC2\xB1"
++                             "25m 10min old",
++                             alertText(p, 32));
++}
++
++static void test_alert_without_position_sharing_is_plain()
++{
++    TEST_ASSERT_EQUAL_STRING("\aHELP", alertText(fix(), 0));
++    meshtastic_Position p = fix();
++    p.latitude_i = p.longitude_i = 0;
++    TEST_ASSERT_EQUAL_STRING("\aHELP", alertText(p, 32)); // no fix
++}
++
++static void test_alert_link_respects_channel_precision()
++{
++    // Truncated and centered like PositionModule; accuracy at least the precision radius
++    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WDhgM-?m \xC2\xB1"
++                             "365m",
++                             alertText(fix(), 16));
++    TEST_ASSERT_EQUAL_STRING("\aSOS https://osm.org/go/0C0R~O5--?m \xC2\xB1"
++                             "2920m",
++                             alertText(fix(), 13, 1000000, "\aSOS"));
++    TEST_ASSERT_EQUAL_STRING("\aHELP https://osm.org/go/0C0WDhgM-?m \xC2\xB1"
++                             "365m",
++                             alertText(fix(0), 16)); // radius shown even without DOP
++}
++
++static void test_alert_link_dropped_when_too_long()
++{
++    char alert[meshtastic_Constants_DATA_PAYLOAD_LEN - 20];
++    memset(alert, 'x', sizeof(alert) - 1);
++    alert[sizeof(alert) - 1] = 0;
++    TEST_ASSERT_EQUAL_STRING(alert, alertText(fix(), 32, 1000000, alert));
++    char small[16];
++    TEST_ASSERT_EQUAL(5, userButtonActionsAlertText(small, sizeof(small), "\aHELP", fix(), 32, 1000000));
++    TEST_ASSERT_EQUAL_STRING("\aHELP", small);
++}
++
+ void setup()
+ {
+     initializeTestEnvironment();
+@@ -430,6 +556,14 @@ void setup()
+     RUN_TEST(test_lead_up_counts_up_to_shutdown);
+     RUN_TEST(test_lead_up_never_on_a_click);
+     RUN_TEST(test_lead_up_with_start_after_last_note);
++    RUN_TEST(test_osm_short_link_matches_upstream);
++    RUN_TEST(test_map_zoom_from_accuracy);
++    RUN_TEST(test_alert_with_map_link);
++    RUN_TEST(test_alert_accuracy_from_hdop_or_pdop);
++    RUN_TEST(test_alert_link_shows_age_of_old_fix);
++    RUN_TEST(test_alert_without_position_sharing_is_plain);
++    RUN_TEST(test_alert_link_respects_channel_precision);
++    RUN_TEST(test_alert_link_dropped_when_too_long);
+     exit(UNITY_END());
+ }
+ 
+-- 
+2.54.0 (Apple Git-157)
+

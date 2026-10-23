@@ -54,6 +54,12 @@ Upstream declined earlier requests mainly over accidental sends on devices witho
 - **Long-press time:** `long_press_shutdown_secs` (preset 10 s, switched off on release) so the device is not switched off by accident in a pocket or a child's hand.
 - Gestures with other stock meanings stay unchanged by default (`DEFAULT`). The preset overrides double and multi-press, making the stock ping, GPS toggle and mute unreachable.
 - Audible feedback: a beep when an alert or ack is sent, a short "boop" when rate-limited.
+- **Privacy of the map link:** with `alert_with_position`, the alert text carries an OpenStreetMap
+  shortlink (`https://osm.org/go/<code>?m ±25m`, computed on the device) so plain text clients can open the
+  location. It follows the primary channel `position_precision` exactly like `PositionModule`: no link at
+  precision 0 or without a fix since boot, otherwise the same truncated coordinates via
+  `applyPositionPrecision()` and an accuracy of at least the precision radius. The link never reveals more
+  than the position packet sent alongside it.
 
 ## Migration note
 
@@ -69,6 +75,7 @@ The build-flag config maps 1:1 to the protobuf fields (`UBA_SINGLE_PRESS` -> `si
 - Gesture mapping lives in `src/input/InputBroker.cpp` (`userConfigNoScreen`); `ButtonThread` emits `INPUT_BROKER_*` events.
 - Stock nag stop is in `InputBroker::handleInputEvent` via `externalNotificationModule->nagging()` / `stopNow()`.
 - Ad-hoc position: `service->refreshLocalMeshNode()` then `service->trySendPosition(NODENUM_BROADCAST, true)`, as `SystemCommandsModule` does for `INPUT_BROKER_SEND_PING`.
+- Map link: `osmShortLink()` ports `lib/short_link.rb` of openstreetmap-website (tested against its output); `userButtonActionsAlertText()` adds accuracy (HDOP/PDOP), zoom and fix age, and drops the link if the text would exceed `DATA_PAYLOAD_LEN`.
 - Text send: `router->allocForSending()`, channel 0, `HIGH`, `want_ack = false`, `sendToMesh(p, RX_SRC_LOCAL, true)`.
 - Pure decision logic: `UserButtonGesture {USER_BUTTON_SINGLE, USER_BUTTON_DOUBLE}`, `UserButtonOutcome` (`UBA_OUTCOME_*`), `UserButtonRateLimiter`, `userButtonActionsResolve()`; unit-tested in `test_user_button_actions`.
 - Long press: stock threshold is 3900 ms (`ButtonConfig::longLongPressTime`, `uint16_t`), applied only after 30 s uptime, on release.

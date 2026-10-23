@@ -11,6 +11,12 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - `build.sh` takes validated `HB_*` parameters, writes the OTA zip to `dist/`, and emits the bell as an octal escape so any text may follow it.
 - OTA (Bluetooth) update instructions in `docs/flashing.md`.
 
+### Added (map link)
+- HELP and SOS texts carry an OpenStreetMap link computed on the tag, with accuracy and the age of an
+  old fix, e.g. `\x07HELP https://osm.org/go/0C0WCb6VB--?m ±25m 4min old`. It honors the primary
+  channel's `position_precision` (no link at 0, truncated position otherwise). Fork updated to `031139d`.
+- Node-RED filter classifies texts by their first word and extracts the link.
+
 ### Changed
 - Fork updated to `31ad1fd`: click or short hold sends HELP, double or rapid press sends SOS (separate 30 s
   windows; the press decides on the state at button-down), any press stops a playing melody, a 3-10 s hold plays a "not sent" hint, a 10 s hold shuts down on release.
