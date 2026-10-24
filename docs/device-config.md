@@ -12,5 +12,13 @@ App settings that go with the Help Button preset.
 - Detection Sensor: **disabled** (must not touch the button GPIO).
 - Private primary channel with its own PSK; no MQTT on the tag.
 
+## T1000-E (untested)
+
+- `double_tap_as_button` has no effect: the QMA6100P accelerometer only wakes the screen logic.
+- The detection sensor is excluded from the build.
+- There is no notification LED; alerts are buzzer only.
+- Do not hold the button while plugging in USB, or while the cable is attached during a reboot: the
+  bootloader (OTAFIX 2.5 or newer) enters DFU mode instead of starting the firmware.
+
 Parents carry a handheld on the same channel. Texts with the bell character make the
 phone notify and the tag ring.

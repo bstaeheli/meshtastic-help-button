@@ -6,6 +6,9 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added (T1000-E)
+- Preset `tracker-t1000-e_sos` for the Seeed SenseCAP T1000-E, built and released next to the Tag; untested on hardware, testers wanted ([checklist](docs/t1000-e-test.md)). `custom-build` gets a `device` input.
+
 ### Removed
 - Phone flashing instructions (DFU mode could not be entered from an iPhone); the OTA zip is still published, untested.
 

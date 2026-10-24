@@ -1,6 +1,6 @@
 # Behavior
 
-Preset behavior of the Help Button firmware (`rak_wismeshtag_sos`).
+Preset behavior of the Help Button firmware (`rak_wismeshtag_sos`, `tracker-t1000-e_sos`).
 
 | Button gesture | Stock behavior | Preset behavior |
 | --- | --- | --- |
@@ -10,6 +10,13 @@ Preset behavior of the Help Button firmware (`rak_wismeshtag_sos`).
 | Release after 3 to 10 s | shutdown after 3.9 s | nothing sent; short hint jingle (C5 E5 G5 E5 C5) means "not sent" |
 | Release after 10 s or more | shutdown after 3.9 s (only after 30 s uptime) | switch off with the stock shutdown melody, only if uptime was over 30 s, else nothing |
 | HELP or SOS again within 30 s | n/a | short "boop", nothing sent |
+
+## Device differences
+
+- The T1000-E (untested on hardware) has one button, which also powers it on. The 30 s uptime holdoff applies
+  to shutdown only; whether the power-on press can send HELP is a test item (see [t1000-e-test.md](t1000-e-test.md)).
+- Timings and tunes are the same on both devices. The stock T1000-E multi-press actions (ping, GPS toggle,
+  mute) are unreachable, as on the Tag.
 
 While the button is held from 3 s on, eight rising notes (C3 to C4, 200 ms each, at about 3.0, 4.0, 4.9,
 5.9, 6.9, 7.9, 8.8 and 9.8 s) count up to the shutdown; releasing stops the melody. The tag switches off
