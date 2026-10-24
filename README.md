@@ -85,11 +85,12 @@ running notifications.
 | [firmware#7127](https://github.com/meshtastic/firmware/issues/7127) | Canned messages on T1000-E via button combinations | moved to discussion |
 | [firmware discussion #7949](https://github.com/meshtastic/firmware/discussions/7949) | Same, continued | open |
 
-The T1000-E users in #7127 and discussion #7949 are the target audience for the T1000-E build.
 | [firmware#2156](https://github.com/meshtastic/firmware/issues/2156) | Single select button sends first canned message | closed, not planned |
 | [Meshtastic-device#60](https://github.com/meshtastic/Meshtastic-device/issues/60) | "I need emergency help" button (2020) | closed |
 | [Forum: Kid Tracker While Hiking](https://meshtastic.discourse.group/t/kid-tracker-while-hiking/2257) | Same use case | discussion |
 | [Forum: Heltec V3 kids' pagers](https://meshtastic.discourse.group/t/feature-request-heltec-lora32-v3/14889) | Same use case | discussion |
+
+The T1000-E users in #7127 and discussion #7949 are the target audience for the T1000-E build.
 
 ## License
 
