@@ -17,6 +17,11 @@ on:
       off_secs:
         description: Hold time that switches the tag off (seconds, max 65)
         default: "10"
+      device:
+        description: Device to build
+        type: choice
+        default: all
+        options: [all, rak_wismeshtag_sos, tracker-t1000-e_sos]
       rate_secs:
         description: Minimum seconds between two alerts of the same kind
         default: "30"
@@ -44,7 +49,8 @@ jobs:
           HB_OFF_SECS: ${{ inputs.off_secs }}
           HB_RATE_SECS: ${{ inputs.rate_secs }}
           HB_VERSION: custom-${{ github.run_number }}
-        run: scripts/build.sh
+          HB_DEVICE: ${{ inputs.device }}
+        run: if [ "$HB_DEVICE" = all ]; then scripts/build.sh; else scripts/build.sh "$HB_DEVICE"; fi
       - name: Release notes
         env:
           HELP: ${{ inputs.help_text }}
@@ -53,12 +59,15 @@ jobs:
           HOLD: ${{ inputs.hold_secs }}
           OFF: ${{ inputs.off_secs }}
           RATE: ${{ inputs.rate_secs }}
+          DEVICE: ${{ inputs.device }}
         run: |
           {
             echo "Custom build from \`$(<FORK_REF)\`."
             echo
             echo "- help: \`$HELP\`, sos: \`$SOS\`, ok: \`$OK\`"
             echo "- hold: ${HOLD} s, off: ${OFF} s, rate limit: ${RATE} s"
+            echo "- device: \`$DEVICE\`"
+            if [ "$DEVICE" != rak_wismeshtag_sos ]; then echo "T1000-E build is untested on hardware."; fi
             echo
             echo '```'
             cat dist/SHA256SUMS

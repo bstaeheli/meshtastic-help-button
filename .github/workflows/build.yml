@@ -63,5 +63,6 @@ jobs:
       - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
+          body: "T1000-E (tracker-t1000-e_sos) is untested on hardware. Testers wanted, see README."
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
