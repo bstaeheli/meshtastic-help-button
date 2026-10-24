@@ -6,10 +6,12 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Removed
+- BLE OTA zip and phone flashing instructions (DFU mode could not be entered from the phone); flash over USB.
+
 ### Added (custom builds)
-- `custom-build` workflow: build with your own texts and timings from the GitHub mobile app; publishes a pre-release with the OTA zip and UF2.
-- `build.sh` takes validated `HB_*` parameters, writes the OTA zip to `dist/`, and emits the bell as an octal escape so any text may follow it.
-- OTA (Bluetooth) update instructions in `docs/flashing.md`.
+- `custom-build` workflow: build with your own texts and timings from the GitHub web UI or app; publishes a pre-release with the UF2.
+- `build.sh` takes validated `HB_*` parameters, emits the bell as an octal escape so any text may follow it.
 
 ### Added (map link)
 - HELP and SOS texts carry an OpenStreetMap link computed on the tag, with accuracy and the age of an
