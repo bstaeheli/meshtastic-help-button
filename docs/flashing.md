@@ -28,3 +28,8 @@ Settings are kept; if anything looks odd, restore the backup.
 
 If the drive does not appear after a double-tap, see Meshtastic's
 [entering bootloader mode](https://meshtastic.org/docs/getting-started/flashing-firmware/nrf52/entering-bootloader-mode/).
+
+## OTA zip
+
+Releases also include a `-ota.zip`, the standard nRF52 DFU package for Bluetooth updates. Untested here
+(entering DFU mode from an iPhone failed); use at your own risk with the USB cable at hand.

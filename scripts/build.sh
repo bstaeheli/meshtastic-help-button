@@ -57,5 +57,8 @@ for e in "${envs[@]}"; do
     uf2=$(find "$FORK_DIR/.pio/build/$e" -name 'firmware*.uf2' | head -n1)
     [ -n "$uf2" ] || { echo "no UF2 produced for $e" >&2; exit 1; }
     cp "$uf2" "$root/dist/help-button-$version-mt$upstream-$e.uf2"
+    # nRF52 targets also produce the DFU package for over-the-air updates
+    zip=$(find "$FORK_DIR/.pio/build/$e" -maxdepth 1 -name 'firmware*.zip' | head -n1)
+    [ -z "$zip" ] || cp "$zip" "$root/dist/help-button-$version-mt$upstream-$e-ota.zip"
 done
-(cd "$root/dist" && shasum -a 256 -- *.uf2 >SHA256SUMS)
+(cd "$root/dist" && shasum -a 256 -- *.uf2 *.zip >SHA256SUMS)
