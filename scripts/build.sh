@@ -16,7 +16,7 @@ version=${version#v}
 upstream=$(<"$root/UPSTREAM_VERSION")
 upstream=${upstream#v}
 envs=("$@")
-[ ${#envs[@]} -gt 0 ] || envs=(rak_wismeshtag_sos)
+[ ${#envs[@]} -gt 0 ] || envs=(rak_wismeshtag_sos tracker-t1000-e_sos)
 
 help=${HB_HELP_TEXT:-HELP}
 sos=${HB_SOS_TEXT:-SOS}
