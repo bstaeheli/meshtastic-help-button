@@ -11,7 +11,7 @@ Screen-less trackers cannot send a message on demand, and the need keeps coming 
 - [firmware#7127](https://github.com/meshtastic/firmware/issues/7127) and [discussion #7949](https://github.com/meshtastic/firmware/discussions/7949) canned messages via button combinations; "bell to device, button acknowledges"
 - [firmware#2156](https://github.com/meshtastic/firmware/issues/2156) single button sends first canned message
 - [Meshtastic-device#60](https://github.com/meshtastic/Meshtastic-device/issues/60) "I need emergency help" button
-- Forum: [Kid Tracker While Hiking](https://meshtastic.discourse.group/t/kid-tracker-while-hiking/2257), [Heltec V3 kids' pagers](https://meshtastic.discourse.group/t/feature-request-heltec-lora32-v3/14889)
+- Old Meshtastic forum: threads "Kid Tracker While Hiking" and "Heltec V3 kids' pagers" described the same use case; the forum is offline and they can no longer be read.
 
 The Detection Sensor module cannot share the button GPIO with the button handler, so there is no
 configuration-only way today.
